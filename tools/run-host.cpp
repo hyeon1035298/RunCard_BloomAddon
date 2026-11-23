@@ -120,9 +120,26 @@ bool Unload(DWORD timeoutMs) {
     return WaitFor([] { return IsSet(g_unloaded); }, timeoutMs);
 }
 
-// The cards' window (on the mod's own thread: found by its class).
+// The cards' window (on the mod's own thread: found by its class), this process's own: an installed copy of the add-on
+// has one of the same class in explorer.
 HWND Cards() {
-    return FindWindowW(L"RunCardWindow_run-card", nullptr);
+    struct Find {
+        DWORD pid;
+        HWND found;
+    } f{GetCurrentProcessId(), nullptr};
+    EnumWindows(
+        [](HWND h, LPARAM p) -> BOOL {
+            auto* f = reinterpret_cast<Find*>(p);
+            DWORD pid = 0;
+            wchar_t cls[64];
+            GetWindowThreadProcessId(h, &pid);
+            if (pid != f->pid || !GetClassNameW(h, cls, ARRAYSIZE(cls)) || wcscmp(cls, L"RunCardWindow_run-card") != 0)
+                return TRUE;
+            f->found = h;
+            return FALSE;
+        },
+        reinterpret_cast<LPARAM>(&f));
+    return f.found;
 }
 
 float Scale() {

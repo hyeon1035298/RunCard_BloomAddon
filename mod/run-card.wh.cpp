@@ -100,6 +100,7 @@ and the status files beside them, and use no tokens. At rest nothing moves or re
 #include <chrono>
 #include <cmath>
 #include <map>
+#include <set>
 #include <memory>
 #include <optional>
 #include <string>
@@ -425,11 +426,32 @@ struct Status {
     std::string session;
     DWORD pid = 0;
     bool interactive = true;
+    bool bloomRun = false;  // one of Bloom's own runs (its AI chats, its usage looks): never a card, as in Bloom's notices
     bool waiting = false;  // its status: it waits for the person (a permission, a question)
     uint64_t procStart = 0;
     FILETIME seen{};
     bool alive = true;
 };
+
+// The folder Bloom's own Claude Code runs work in (Bloom's OneShot.WorkDir), full and without a trailing slash.
+const std::wstring& BloomWorkDir() {
+    static const std::wstring dir = [] {
+        std::wstring d = Env(L"LOCALAPPDATA");
+        return d.empty() ? d : d + L"\\Bloom\\ai";
+    }();
+    return dir;
+}
+
+bool SameFolder(const std::wstring& a, const std::wstring& b) {
+    auto full = [](const std::wstring& p) {
+        wchar_t out[MAX_PATH * 2];
+        DWORD n = GetFullPathNameW(p.c_str(), ARRAYSIZE(out), out, nullptr);
+        std::wstring f = n && n < ARRAYSIZE(out) ? std::wstring(out, n) : p;
+        while (f.size() > 3 && (f.back() == L'\\' || f.back() == L'/')) f.pop_back();
+        return f;
+    };
+    return !a.empty() && !b.empty() && _wcsicmp(full(a).c_str(), full(b).c_str()) == 0;
+}
 
 // Bloom's ClaudeWatch reads the same status words.
 bool WaitingWord(const std::wstring& s) {
@@ -463,6 +485,7 @@ std::optional<Status> ReadStatus(const std::wstring& path) {
         s.pid = DWORD(o.GetNamedNumber(L"pid", 0));
         std::wstring kind(o.GetNamedString(L"kind", L"interactive"));
         s.interactive = kind == L"interactive";
+        s.bloomRun = SameFolder(std::wstring(o.GetNamedString(L"cwd", L"")), BloomWorkDir());
         std::wstring status(o.GetNamedString(L"status", L""));
         for (auto& ch : status) ch = towlower(ch);
         s.waiting = WaitingWord(status);
@@ -537,6 +560,7 @@ constexpr int kStatusEvery = 2;   // status files are looked at every second tic
 constexpr UINT kLeaveMs = 300;    // a card the pointer left folds this much later
 constexpr int kMorphMs = 220;     // a card opening or folding, the stack moving
 constexpr int kFadeMs = 160;      // a card coming or going
+constexpr double kOrphanMs = 180000;  // an open turn with no session file and no line for this long has ended
 constexpr float kGap = 8;         // between stacked cards
 constexpr double kRingTurnMs = 1000;
 constexpr double kFrameMs = 1000.0 / 60;  // the ring turns at most 60 times a second
@@ -596,6 +620,7 @@ private:
     std::vector<std::unique_ptr<Slot>> slots_;
     std::map<std::string, rc::Ask> asks_;  // Bloom's requests, by session
     std::map<std::string, rc::Ms> dismissed_;  // finished cards closed by hand: the session and its turn's end
+    std::set<std::string> bloomRuns_;          // sessions seen working in Bloom's own folder
     uint64_t arrivals_ = 0;
     int ticks_ = 0;
     bool hidden_ = false;
@@ -845,7 +870,10 @@ void App::ReadStatus() {
             } while (FindNextFileW(h, &fd));
             FindClose(h);
         }
-        for (auto& [name, s] : next) s.alive = StillRunning(s.pid, s.procStart);
+        for (auto& [name, s] : next) {
+            s.alive = StillRunning(s.pid, s.procStart);
+            if (s.bloomRun) bloomRuns_.insert(s.session);
+        }
         f.status = std::move(next);
     }
 }
@@ -904,9 +932,16 @@ void App::Update() {
             if (!v.map.turnStartedAt || seen.count(v.id)) continue;
             const Status* st = StatusOf(v.id);
             if (st && !st->interactive) continue;  // `claude -p` runs, programs' sessions
+            if (bloomRuns_.count(v.id)) continue;   // Bloom's own chats: Bloom shows them itself
             rc::Card c = rc::CardOf(v, ko);
             if (!c.turnEnd && st && !st->alive) {
                 // Claude Code is gone with the turn open: closed or killed.
+                c.phase = rc::Phase::Stopped;
+                c.turnEnd = v.lastActivity;
+            }
+            if (!c.turnEnd && !st && now - double(v.lastActivity) > kOrphanMs) {
+                // No session file (gone with its Claude Code) and nothing written for minutes: a turn left open by
+                // a Claude Code that was killed; it ended at its last line.
                 c.phase = rc::Phase::Stopped;
                 c.turnEnd = v.lastActivity;
             }

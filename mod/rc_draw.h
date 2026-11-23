@@ -525,8 +525,8 @@ private:
         int from = std::max(0, n - kRows);
         if (n == 0) {
             if (dc_)
-                Text(c.phase == Phase::Work ? Tr(ko_, L"첫 단계를 준비하는 중", L"Getting ready")
-                                            : Tr(ko_, L"도구를 쓰지 않은 답", L"Answered without tools"),
+                Text(c.phase != Phase::Done && c.phase != Phase::Stopped ? Tr(ko_, L"첫 단계를 준비하는 중", L"Getting ready")
+                                                                         : Tr(ko_, L"도구를 쓰지 않은 답", L"Answered without tools"),
                      kPad + 24, y, w - 2 * kPad - 24, kRowH, 12.5f, DWRITE_FONT_WEIGHT_NORMAL, p.faint);
             return y + kRowH;
         }
