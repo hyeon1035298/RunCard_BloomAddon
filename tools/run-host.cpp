@@ -11,10 +11,20 @@
 //   values <json>        write values.json (as Bloom does); "$log": true and the monitor are added
 //   point <i>            a pointer over the i-th card's header (posted mouse messages; the real pointer stays)
 //   away                 the pointer leaves the cards
-//   click <i> <dx> <dy>  a click on the i-th card, dx/dy DIPs from its top left
+//   click <i> <dx> <dy>  a click on the i-th card, dx/dy DIPs from its top left (a negative dy: from its bottom)
+//   move <i> <dx> <dy>   the pointer over that place of the i-th card (posted), as click places it
+//   hoverat <i> <dx> <dy> the real cursor there (put back when the steps end)
 //   ask <session>        Bloom passes on a permission request for that session (a Bash command)
 //   askq <session>       Bloom passes on a question for that session
+//   askqs <session>      Bloom passes on three questions for that session (shown one at a time)
 //   shot <png>           the cards' area from the screen (DWM's picture) over a grey backdrop
+//   shotc <png>          the same over coloured bands (the glass's blur shows)
+//   shotw <png>          the same over white (shotk: over black), the brightest and darkest windows behind the glass
+//   island <w> <h>       a stand-in for PillTaskbar's island (its window class) at the monitor's top centre, in pixels
+//   reisland <gap> <hid> the island's window destroyed and built anew as PillTaskbar does on a setting change: none
+//                        for <gap> ms, then made hidden, shown <hid> ms later
+//   noisland             the island gone
+//   clear <ms> <tol>     for <ms> ms, the cards must not overlap the island (shown) for more than <tol> ms in all
 
 #include <windows.h>
 #include <wincodec.h>
@@ -37,6 +47,7 @@ HOOKPROC g_proc;
 HANDLE g_loaded, g_unload, g_unloaded;
 HMONITOR g_monitor;
 int g_display = 0;
+int g_size = 100;  // card.size, as the values say (the cards' DIPs are this much larger)
 
 void Check(bool ok, const char* what) {
     printf("%s %s\n", ok ? "PASS" : "FAIL", what);
@@ -142,9 +153,10 @@ HWND Cards() {
     return f.found;
 }
 
+// Pixels per card DIP: the monitor's scale and card.size.
 float Scale() {
     UINT dpi = GetDpiForWindow(Cards());
-    return dpi ? dpi / 96.0f : 1.0f;
+    return (dpi ? dpi / 96.0f : 1.0f) * float(g_size) / 100.0f;
 }
 
 // The i-th card's box in the window, from the window's region (the cards' shapes, top to bottom).
@@ -283,28 +295,67 @@ bool SavePng(const std::wstring& path, HBITMAP bmp, int w, int h) {
     return ok;
 }
 
-// A plain grey window right under the cards while they are captured, so nothing behind them gets into the picture.
-HWND Backdrop(const RECT& box) {
-    static ATOM cls = [] {
+// Coloured bands with white and black between, for the glass: what is behind a card shows through it blurred.
+LRESULT CALLBACK BandsProc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
+    if (msg != WM_PAINT) return DefWindowProcW(h, msg, wp, lp);
+    PAINTSTRUCT ps;
+    HDC dc = BeginPaint(h, &ps);
+    RECT r;
+    GetClientRect(h, &r);
+    const COLORREF bands[] = {RGB(30, 79, 140), RGB(244, 241, 234), RGB(224, 122, 58), RGB(20, 22, 27), RGB(90, 170, 110)};
+    int bw = 70;
+    for (int x = 0, k = 0; x < r.right; x += bw, k++) {
+        HBRUSH b = CreateSolidBrush(bands[k % 5]);
+        RECT band{x, 0, x + bw, r.bottom};
+        FillRect(dc, &band, b);
+        DeleteObject(b);
+    }
+    EndPaint(h, &ps);
+    return 0;
+}
+
+// What a shot puts behind the cards.
+enum class Behind { Grey, Bands, White, Black };
+
+// A plain window right under the cards while they are captured, so nothing behind them gets into the picture: grey,
+// white or black, or the coloured bands.
+HWND Backdrop(const RECT& box, Behind behind = Behind::Grey) {
+    auto plain = [](PCWSTR name, COLORREF fill) {
         WNDCLASSW wc{};
         wc.lpfnWndProc = DefWindowProcW;
         wc.hInstance = GetModuleHandleW(nullptr);
-        wc.hbrBackground = CreateSolidBrush(RGB(128, 128, 128));
-        wc.lpszClassName = L"RunCardShotBackdrop";
+        wc.hbrBackground = CreateSolidBrush(fill);
+        wc.lpszClassName = name;
+        return RegisterClassW(&wc);
+    };
+    static ATOM cls = plain(L"RunCardShotBackdrop", RGB(128, 128, 128));
+    static ATOM white = plain(L"RunCardShotWhite", RGB(255, 255, 255));
+    static ATOM black = plain(L"RunCardShotBlack", RGB(0, 0, 0));
+    static ATOM banded = [] {
+        WNDCLASSW wc{};
+        wc.lpfnWndProc = BandsProc;
+        wc.hInstance = GetModuleHandleW(nullptr);
+        wc.lpszClassName = L"RunCardShotBands";
         return RegisterClassW(&wc);
     }();
-    if (!cls) return nullptr;
-    HWND w = CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_TOPMOST, L"RunCardShotBackdrop", nullptr, WS_POPUP,
+    if (!cls || !banded || !white || !black) return nullptr;
+    PCWSTR name = behind == Behind::Bands   ? L"RunCardShotBands"
+                  : behind == Behind::White ? L"RunCardShotWhite"
+                  : behind == Behind::Black ? L"RunCardShotBlack"
+                                            : L"RunCardShotBackdrop";
+    HWND w = CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_TOPMOST, name, nullptr, WS_POPUP,
                              box.left, box.top, box.right - box.left, box.bottom - box.top, nullptr, nullptr,
                              GetModuleHandleW(nullptr), nullptr);
     if (!w) return nullptr;
     SetWindowPos(w, Cards(), 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
-    Pump(250);
+    // DWM takes the glass's backdrop anew only when the cards' window shows a new frame (the clock's, once a
+    // second): wait for one.
+    Pump(1200);
     return w;
 }
 
 // The region's box with a margin, from the screen as DWM composed it.
-bool Shot(const std::wstring& path) {
+bool Shot(const std::wstring& path, Behind behind = Behind::Grey) {
     HWND p = Cards();
     RECT box{}, w{};
     GetWindowRect(p, &w);
@@ -315,7 +366,11 @@ bool Shot(const std::wstring& path) {
     mi.cbSize = sizeof(mi);
     GetMonitorInfoW(g_monitor, &mi);
     IntersectRect(&box, &box, &mi.rcMonitor);
-    HWND backdrop = Backdrop(box);
+    // The backdrop reaches well past the picture: the glass blurs what is around the card too.
+    RECT under = box;
+    InflateRect(&under, 96, 96);
+    IntersectRect(&under, &under, &mi.rcMonitor);
+    HWND backdrop = Backdrop(under, behind);
     int cw = box.right - box.left, ch = box.bottom - box.top;
     HDC screen = GetDC(nullptr);
     HDC mem = CreateCompatibleDC(screen);
@@ -333,6 +388,82 @@ bool Shot(const std::wstring& path) {
     return ok;
 }
 
+// ---- the stand-in island: a window of PillTaskbar's island class in this process (the cards look for it here) ----
+
+HWND g_island;
+int g_islandW = 0, g_islandH = 0;
+
+void IslandGone() {
+    if (g_island) DestroyWindow(g_island);
+    g_island = nullptr;
+}
+
+// Made as PillTaskbar builds it: hidden, 1x1 at the monitor's top left; then placed, shaped and shown (IslandShow).
+void IslandMake() {
+    static bool registered = false;
+    if (!registered) {
+        WNDCLASSEXW wc{sizeof(wc)};
+        wc.lpfnWndProc = DefWindowProcW;
+        wc.hInstance = GetModuleHandleW(nullptr);
+        wc.hbrBackground = static_cast<HBRUSH>(GetStockObject(BLACK_BRUSH));
+        wc.lpszClassName = L"PillTaskbarIsland_test";
+        registered = RegisterClassExW(&wc) != 0;
+    }
+    MONITORINFO mi{};
+    mi.cbSize = sizeof(mi);
+    GetMonitorInfoW(g_monitor, &mi);
+    g_island = CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_NOACTIVATE, L"PillTaskbarIsland_test", L"", WS_POPUP,
+                               mi.rcMonitor.left, mi.rcMonitor.top, 1, 1, nullptr, nullptr, GetModuleHandleW(nullptr), nullptr);
+}
+
+void IslandShow() {
+    if (!g_island) return;
+    MONITORINFO mi{};
+    mi.cbSize = sizeof(mi);
+    GetMonitorInfoW(g_monitor, &mi);
+    int x = (mi.rcMonitor.left + mi.rcMonitor.right - g_islandW) / 2;
+    SetWindowPos(g_island, HWND_TOPMOST, x, mi.rcMonitor.top, g_islandW, g_islandH, SWP_NOACTIVATE);
+    SetWindowRgn(g_island, CreateRoundRectRgn(0, 0, g_islandW + 1, g_islandH + 1, g_islandH, g_islandH), FALSE);
+    ShowWindow(g_island, SW_SHOWNOACTIVATE);
+}
+
+// Whether a card overlaps the island now: the cards' region (their shapes; their paths while they glide) on the screen.
+bool CardsOverIsland() {
+    HWND w = Cards();
+    RECT island{}, win{};
+    if (!w || !g_island || !IsWindowVisible(g_island) || !GetWindowRect(g_island, &island) || !GetWindowRect(w, &win))
+        return false;
+    HRGN rgn = CreateRectRgn(0, 0, 0, 0);
+    bool over = false;
+    if (GetWindowRgn(w, rgn) != ERROR) {
+        OffsetRgn(rgn, win.left, win.top);
+        over = RectInRegion(rgn, &island) != FALSE;
+    }
+    DeleteObject(rgn);
+    return over;
+}
+
+// For `ms`, how long the cards overlap the island; at most `tolMs` passes.
+void Clear(int ms, int tolMs) {
+    ULONGLONG t0 = GetTickCount64(), last = t0;
+    int overMs = 0;
+    long long first = -1, end = -1;
+    while (GetTickCount64() - t0 < ULONGLONG(ms)) {
+        Pump(20);
+        ULONGLONG now = GetTickCount64();
+        if (CardsOverIsland()) {
+            overMs += int(now - last);
+            if (first < 0) first = (long long)(last - t0);
+            end = (long long)(now - t0);
+        }
+        last = now;
+    }
+    printf("clear: over the island %d ms (first %lld, last %lld)\n", overMs, first, end);
+    char what[96];
+    snprintf(what, sizeof(what), "the cards keep clear of the island (over it %d ms, at most %d)", overMs, tolMs);
+    Check(overMs <= tolMs, what);
+}
+
 std::string g_values;
 
 void Values(const std::string& more) {
@@ -340,6 +471,11 @@ void Values(const std::string& more) {
                     "\"";
     if (!g_values.empty()) v += ", " + g_values;
     if (!more.empty()) v += ", " + more;
+    size_t at = v.find("\"card.size\"");
+    if (at != std::string::npos) {
+        size_t digit = v.find_first_of("0123456789", at);
+        g_size = digit == std::string::npos ? 100 : std::clamp(atoi(v.c_str() + digit), 80, 150);
+    }
     WriteText(g_data + L"\\" + addon::kValuesFile, "{" + v + "}");
 }
 
@@ -456,6 +592,17 @@ int wmain(int argc, wchar_t** argv) {
             }
             Pump(500);
             i++;
+        } else if (s == L"hoverat") {
+            // The real cursor at dx/dy DIPs from card n's top left (put back when the steps end).
+            RECT r;
+            if (!cursorSaved) cursorSaved = GetCursorPos(&cursorWas);
+            if (CardBox(_wtoi(arg(1).c_str()), r)) {
+                POINT at{r.left + int(_wtoi(arg(2).c_str()) * Scale()), r.top + int(_wtoi(arg(3).c_str()) * Scale())};
+                ClientToScreen(Cards(), &at);
+                SetCursorPos(at.x, at.y);
+            }
+            Pump(500);
+            i += 3;
         } else if (s == L"close-open") {
             // Right-click the first open card (a finished one closes by hand).
             RECT r;
@@ -484,14 +631,17 @@ int wmain(int argc, wchar_t** argv) {
             if (cursorSaved) SetCursorPos(cursorWas.x, cursorWas.y);
             else PostMessageW(Cards(), WM_MOUSELEAVE, 0, 0);
             Pump(700);
-        } else if (s == L"click") {
+        } else if (s == L"click" || s == L"move") {
             RECT r;
             if (CardBox(_wtoi(arg(1).c_str()), r)) {
                 float sc = Scale();
-                POINT at{r.left + int(_wtoi(arg(2).c_str()) * sc), r.top + int(_wtoi(arg(3).c_str()) * sc)};
+                int dy = _wtoi(arg(3).c_str());
+                POINT at{r.left + int(_wtoi(arg(2).c_str()) * sc), dy < 0 ? r.bottom + int(dy * sc) : r.top + int(dy * sc)};
                 PostMouse(WM_MOUSEMOVE, 0, at);
-                PostMouse(WM_LBUTTONDOWN, MK_LBUTTON, at);
-                PostMouse(WM_LBUTTONUP, 0, at);
+                if (s == L"click") {
+                    PostMouse(WM_LBUTTONDOWN, MK_LBUTTON, at);
+                    PostMouse(WM_LBUTTONUP, 0, at);
+                }
             }
             Pump(400);
             i += 3;
@@ -509,9 +659,43 @@ int wmain(int argc, wchar_t** argv) {
                     "(추천)\",\"description\":\"지금 청구서와 같습니다\"},{\"label\":\"내림\",\"description\":\"\"}]}]}");
             Pump(500);
             i++;
-        } else if (s == L"shot") {
-            Shot(arg(1));
+        } else if (s == L"askqs") {
+            ToCards("{\"t\":\"ask\",\"id\":\"q3\",\"session\":\"" + Narrow(arg(1)) +
+                    "\",\"pid\":0,\"tool\":\"AskUserQuestion\",\"body\":\"\",\"questions\":["
+                    "{\"header\":\"반올림\",\"text\":\"일할 계산 금액은 어떻게 반올림할까요?\",\"multi\":false,\"choices\":["
+                    "{\"label\":\"센트 단위 반올림 (추천)\",\"description\":\"지금 청구서와 같습니다\"},{\"label\":\"내림\","
+                    "\"description\":\"\"}]},"
+                    "{\"header\":\"통화\",\"text\":\"어느 통화부터 적용할까요?\",\"multi\":true,\"choices\":["
+                    "{\"label\":\"원화\",\"description\":\"\"},{\"label\":\"달러\",\"description\":\"\"}]},"
+                    "{\"header\":\"적용 시점\",\"text\":\"언제부터 바꿀까요?\",\"multi\":false,\"choices\":["
+                    "{\"label\":\"다음 달부터\",\"description\":\"\"},{\"label\":\"바로\",\"description\":\"\"}]}]}");
+            Pump(500);
             i++;
+        } else if (s == L"shot" || s == L"shotc" || s == L"shotw" || s == L"shotk") {
+            Shot(arg(1), s == L"shotc"   ? Behind::Bands
+                         : s == L"shotw" ? Behind::White
+                         : s == L"shotk" ? Behind::Black
+                                         : Behind::Grey);
+            i++;
+        } else if (s == L"island") {
+            IslandGone();
+            g_islandW = _wtoi(arg(1).c_str());
+            g_islandH = _wtoi(arg(2).c_str());
+            IslandMake();
+            IslandShow();
+            i += 2;
+        } else if (s == L"reisland") {
+            IslandGone();
+            Pump(_wtoi(arg(1).c_str()));
+            IslandMake();
+            Pump(_wtoi(arg(2).c_str()));
+            IslandShow();
+            i += 2;
+        } else if (s == L"noisland") {
+            IslandGone();
+        } else if (s == L"clear") {
+            Clear(_wtoi(arg(1).c_str()), _wtoi(arg(2).c_str()));
+            i += 2;
         } else {
             fwprintf(stderr, L"unknown step %ls\n", s.c_str());
             break;
@@ -519,6 +703,7 @@ int wmain(int argc, wchar_t** argv) {
     }
 
     if (cursorSaved) SetCursorPos(cursorWas.x, cursorWas.y);
+    IslandGone();
     Check(Unload(10000), "unloaded");
     Check(Cards() == nullptr, "the cards' window is gone");
     Check(GetModuleHandleW(mod.c_str()) == nullptr, "mod DLL unmapped");

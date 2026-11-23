@@ -10,11 +10,16 @@
 
 #pragma once
 
+#include "si/si_json.h"
+#include "si/si_lotmap.h"
 #include "si/si_model.h"
 
 #include <algorithm>
 #include <cstdint>
+#include <iterator>
+#include <map>
 #include <optional>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -37,6 +42,11 @@ struct Step {
     Ms startedAt = 0;
     std::optional<Ms> endedAt;  // absent while it runs
     bool failed = false;        // an error, or refused
+    bool sub = false;           // a sub's step: a subagent's, or a T3 sub-session's (drawn with its tag)
+    std::string subOf;          // ... which sub: "agent:<its id>", "session:<its id>" or "thread:<its T3 thread>"
+    std::string subAlso;        // ... the same sub's other name: its T3 thread beside its session (one number for both)
+    int subNo = 0;              // ... its number on the card for the turn ("[S1]"; NumberSubs); 0: not numbered
+    bool asks = false;          // ... a T3 sub's one step saying it waits on an answer (kept with card.subtasks off)
 };
 
 // One question of AskUserQuestion, as Bloom passes it on.
@@ -52,15 +62,32 @@ struct Question {
 // A request from Bloom waiting on this session's card.
 struct Ask {
     std::string id;
+    bool inRow = false;  // a T3 session's question (Bloom's `question`): answered through the row to type in, not Bloom's request
     std::wstring tool;  // "Bash", "Edit", "AskUserQuestion"
     std::wstring body;  // every field of the call as "name: value", one per line (empty for questions)
     std::vector<Question> questions;
     std::vector<std::vector<int>> picks;  // the choices picked so far, per question
+    int page = 0;                         // the question shown: several are shown one at a time
+    // A sub's request on the card of the session it works for: the line saying whose it is ("하위 · 문서 정리"), and the
+    // sub-session it came from (a T3 sub's: its answers go there; empty for a subagent's, which asks under the card's).
+    std::wstring sub;
+    std::string from;
+    bool sourced = false;  // whose it is is settled (a subagent's request is told from the board once it shows there)
     bool Answered() const {
         if (questions.empty()) return false;
         for (size_t i = 0; i < questions.size(); i++)
             if (i >= picks.size() || picks[i].empty()) return false;
         return true;
+    }
+    // The question to go to once question `from` is answered: the next one not answered after it, else before it;
+    // -1 when every one is.
+    int NextOpen(int from) const {
+        int n = int(questions.size());
+        for (int k = 1; k < n; k++) {
+            int i = (from + k) % n;
+            if (i >= int(picks.size()) || picks[i].empty()) return i;
+        }
+        return -1;
     }
 };
 
@@ -75,6 +102,21 @@ struct Card {
     int filesChanged = 0;
     bool asking = false;      // the transcript shows a question or a plan waiting (Phase::Ask while it lasts)
     bool askingPlan = false;  // ... and it is a plan
+    bool stoppable = false;   // a session in a terminal that Bloom can stop (Esc into its console): the Stop button
+    bool stopping = false;    // Stop was just pressed: the button waits, and is not pressed twice
+    // 보내기 (a T3 session's card): words for the session, typed in the buttons' row.
+    bool canSay = false;      // Bloom can send this session words: the 보내기 button
+    bool composing = false;   // the row is the box to type in (Stop and Open hidden)
+    bool focused = false;     // the window's edit box is over it, taking the keys
+    bool typed = false;       // there are words in it (its send button lit)
+    std::wstring draft;       // the words in it while the edit box is elsewhere (drawn)
+    std::wstring note;        // what came of a send, in the row for a while ("보냈어요")
+    bool noteBad = false;     // ... and it did not go
+    // Its subs (T3 sub-sessions, and its own subagents; their steps are among `steps`, marked).
+    int kidsRunning = 0;      // sub-sessions still at work: the card stays while there are any
+    int agentsRunning = 0;    // its own subagents still at work (background agents, workflow agents: past the turn too)
+    Ms subsEnd = 0;           // when the last of its subs' steps shown ended (WorkOn; its subs may be hidden after)
+    std::wstring subAsk;      // the row answers a sub's question: whose ("하위 · 문서 정리"); empty: none
 };
 
 // ---- words ------------------------------------------------------------------------------------------------------
@@ -172,6 +214,7 @@ struct Run {
     std::optional<Ms> endedAt;
     bool running = false, failed = false;
     int calls = 0;
+    size_t order = 0;  // its first call's place on the board
 };
 
 inline int Distinct(const std::vector<std::wstring>& labels) {
@@ -289,29 +332,72 @@ inline Step Words(const Run& r, bool ko) {
 
 }  // namespace detail
 
-// The turn's steps: the main loop's tool calls since the turn began, runs of one kind folded.
-inline std::vector<Step> StepsOf(const si::Board& b, bool ko) {
+// Another company's model id as its name reads, like ModelName's: "GPT-6 Luna" from "gpt-6-luna", "GPT-5.4 Mini",
+// "Gemini 4 Neon"; an id of another family, or not of the form family-version[-words], as it is.
+inline std::wstring OtherModelName(const std::wstring& id) {
+    std::vector<std::wstring> parts;
+    for (size_t at = 0; at <= id.size();) {
+        size_t dash = id.find(L'-', at);
+        if (dash == std::wstring::npos) dash = id.size();
+        parts.push_back(id.substr(at, dash - at));
+        at = dash + 1;
+    }
+    auto version = [](const std::wstring& p) {
+        return !p.empty() && p.front() != L'.' && p.back() != L'.' &&
+               std::all_of(p.begin(), p.end(), [](wchar_t c) { return (c >= L'0' && c <= L'9') || c == L'.'; });
+    };
+    auto word = [](const std::wstring& p) {
+        return !p.empty() && std::all_of(p.begin(), p.end(), [](wchar_t c) { return (c >= L'a' && c <= L'z') || (c >= L'0' && c <= L'9'); });
+    };
+    if (parts.size() < 2 || !version(parts[1])) return id;
+    std::wstring out = parts[0] == L"gpt" ? L"GPT-" + parts[1] : parts[0] == L"gemini" ? L"Gemini " + parts[1] : L"";
+    if (out.empty()) return id;
+    for (size_t i = 2; i < parts.size(); i++) {
+        if (!word(parts[i])) return id;
+        std::wstring w = parts[i];
+        if (w[0] >= L'a' && w[0] <= L'z') w[0] = wchar_t(w[0] - L'a' + L'A');
+        out += L" " + w;
+    }
+    return out;
+}
+
+// The turn's steps: the tool calls since the turn began, runs of one kind folded, in the order they began. The main
+// loop's, and with `subagents` its subagents' too (Agent, workflow agents: each loop folded on its own, its steps
+// marked as that subagent's).
+inline std::vector<Step> StepsOf(const si::Board& b, bool ko, bool subagents = true) {
     std::vector<Step> out;
     if (!b.turnStartedAt) return out;
-    std::optional<detail::Run> run;
-    auto flush = [&] {
-        if (run) out.push_back(detail::Words(*run, ko));
-        run.reset();
+    std::vector<std::pair<size_t, Step>> made;
+    std::map<std::string, detail::Run> open;  // each loop's run under way ('' the main loop's, else the agent's id)
+    auto flush = [&](const std::string& loop) {
+        auto it = open.find(loop);
+        if (it == open.end()) return;
+        Step s = detail::Words(it->second, ko);
+        if (!loop.empty()) {
+            s.sub = true;
+            s.subOf = "agent:" + loop;
+        }
+        made.emplace_back(it->second.order, std::move(s));
+        open.erase(it);
     };
-    for (const si::Entry& e : b.entries) {
-        if (e.tool.empty() || !e.agentId.empty() || e.startedAt < *b.turnStartedAt) continue;
+    for (size_t i = 0; i < b.entries.size(); i++) {
+        const si::Entry& e = b.entries[i];
+        if (e.tool.empty() || (!subagents && !e.agentId.empty()) || e.startedAt < *b.turnStartedAt) continue;
         Icon icon = KindOf(e.tool);
         bool running = e.status == si::Status::Run && !e.endedAt;
         bool failed = e.status == si::Status::Err || e.status == si::Status::Block;
+        auto it = open.find(e.agentId);
+        detail::Run* run = it != open.end() ? &it->second : nullptr;
         // Agents and questions stand alone (each its own step); a failure ends a run so it shows.
         bool joins = run && run->icon == icon && icon != Icon::Agent && icon != Icon::Question && icon != Icon::Plan &&
                      !run->failed && (icon != Icon::Mcp && icon != Icon::Other ? true : run->tool == e.tool);
         if (!joins) {
-            flush();
-            run = detail::Run{};
+            flush(e.agentId);
+            run = &open[e.agentId];
             run->icon = icon;
             run->tool = e.tool;
             run->startedAt = e.startedAt;
+            run->order = i;
         }
         run->labels.push_back(e.label);
         run->calls++;
@@ -323,30 +409,388 @@ inline std::vector<Step> StepsOf(const si::Board& b, bool ko) {
             run->endedAt = std::max(run->endedAt.value_or(0), *e.endedAt);
         }
     }
-    flush();
+    while (!open.empty()) flush(open.begin()->first);
+    std::stable_sort(made.begin(), made.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+    for (auto& [order, s] : made) out.push_back(std::move(s));
     return out;
 }
 
-inline Card CardOf(const si::SessionView& v, bool ko) {
+// The session's own subagents at work (Agent calls, workflow agents, background ones going on past the turn), from the
+// board's record of every live one (Board::live: not the 80 kept entries, nor the 12 the map shows): one in a tool call
+// that wrote within kAgentCallMs (a long build), else one that wrote in this turn within kAgentQuietMs (one killed
+// leaves no end). `now` 0: no quiet counted.
+constexpr Ms kAgentQuietMs = 10 * 60 * 1000, kAgentCallMs = 30 * 60 * 1000;
+inline int AgentsAtWork(const si::Board& b, Ms now) {
+    if (!b.turnStartedAt) return 0;
+    int n = 0;
+    for (const auto& [id, l] : b.live) {
+        bool calling = !l.calls.empty();
+        if (!calling && l.last < *b.turnStartedAt) continue;
+        if (now && now - l.last >= (calling ? kAgentCallMs : kAgentQuietMs)) continue;
+        n++;
+    }
+    return n;
+}
+
+inline Card CardOf(const si::SessionView& v, bool ko, Ms now = 0) {
     Card c;
     c.id = v.id;
     c.title = v.title.empty() ? v.project : v.title;
+    // The main loop's model: a subagent's steps never change it (the board takes its model from the main loop only).
     c.model = v.map.model ? ModelName(*v.map.model) : std::wstring();
     c.turnStart = v.map.turnStartedAt.value_or(0);
     c.turnEnd = v.map.turnEndedAt;
     c.filesChanged = v.map.filesChanged;
     c.steps = StepsOf(v.map, ko);
+    c.agentsRunning = AgentsAtWork(v.map, now);
     c.asking = v.status == si::SessionState::Ask;
     if (c.asking)
         for (auto it = c.steps.rbegin(); it != c.steps.rend(); ++it)
-            if (!it->endedAt && it->icon == Icon::Plan) c.askingPlan = true;
+            if (!it->endedAt && !it->sub && it->icon == Icon::Plan) c.askingPlan = true;
     c.phase = c.turnEnd ? (v.map.turnAborted ? Phase::Stopped : Phase::Done) : c.asking ? Phase::Ask : Phase::Work;
     return c;
 }
 
-// The step under way, if any.
+// The last step, while it runs.
 inline const Step* Current(const Card& c) {
     return !c.steps.empty() && !c.steps.back().endedAt ? &c.steps.back() : nullptr;
+}
+
+// The step the headline names: the newest one still running (a sub's work runs beside the main loop's Agent step).
+inline const Step* Under(const Card& c) {
+    for (auto it = c.steps.rbegin(); it != c.steps.rend(); ++it)
+        if (!it->endedAt) return &*it;
+    return nullptr;
+}
+
+// ---- sub-sessions: Bloom's `kin` ----------------------------------------------------------------------------------
+// A T3 session can start sub-sessions (T3 threads of their own: Claude, Codex, Gemini...). Bloom, which reads T3 Code's
+// state, names a session's parent and its subs at work when asked; the card of the session that started them shows
+// their work among its steps, and a Claude sub-session (whose transcript is read here like any) gets no card of its
+// own. Its subs' subs (and theirs) are taken in by the same card, each with its own number.
+
+enum class KidState : uint8_t { Run, Ask, Done, Failed, Stopped };
+
+// One sub-session, as Bloom's `kin` names it.
+struct Kid {
+    std::string thread, session;  // its T3 thread, and its Claude Code session (empty when it has none: Codex...)
+    std::wstring title;           // the thread's title
+    std::string company = "other";  // claude, codex, gemini, other
+    std::string model;            // the model id T3 runs it on
+    KidState state = KidState::Run;
+    Ms start = 0;
+    std::optional<Ms> end;
+    bool Working() const { return state == KidState::Run || state == KidState::Ask; }
+};
+
+struct Kin {
+    std::string session;
+    std::string parent;      // the session that started it, when Bloom knows one; empty: none
+    std::vector<Kid> kids;   // its sub-sessions at work
+};
+
+constexpr size_t kMaxKids = 24;  // Bloom sends no more; past that the rest are left out
+
+// Bloom's answer {"t":"kin","session","parent","kids":[...]}. Nothing when the line is not one, or names no session; a
+// missing or malformed part reads as none (no parent, no kids), and a kid without a state Bloom gives is left out.
+inline std::optional<Kin> ParseKin(std::string_view line) {
+    si::json::Doc doc;
+    if (!doc.Parse(line)) return std::nullopt;
+    si::json::Val o = doc.Root();
+    if (!o.IsObject() || o["t"].Str() != "kin" || !o["session"].IsString() || o["session"].Str().empty())
+        return std::nullopt;
+    auto str = [](si::json::Val v) { return v.IsString() ? std::string(v.Str()) : std::string(); };
+    Kin k;
+    k.session = str(o["session"]);
+    k.parent = str(o["parent"]);
+    if (k.parent == k.session) k.parent.clear();
+    si::json::Val kids = o["kids"];
+    if (!kids.IsArray()) return k;
+    for (si::json::Val v = kids.First(); v.Exists() && k.kids.size() < kMaxKids; v = v.Next()) {
+        if (!v.IsObject()) continue;
+        std::string state = str(v["state"]);
+        Kid kid;
+        if (state == "run") kid.state = KidState::Run;
+        else if (state == "ask") kid.state = KidState::Ask;
+        else if (state == "done") kid.state = KidState::Done;
+        else if (state == "failed") kid.state = KidState::Failed;
+        else if (state == "stopped") kid.state = KidState::Stopped;
+        else continue;
+        kid.thread = str(v["thread"]);
+        kid.session = str(v["session"]);
+        if (kid.session == k.session) continue;
+        kid.title = si::lotmap::Widen(str(v["title"]));
+        std::string company = str(v["company"]);
+        if (company == "claude" || company == "codex" || company == "gemini") kid.company = company;
+        kid.model = str(v["model"]);
+        if (v["start"].IsNumber()) kid.start = Ms(v["start"].Num());
+        if (v["end"].IsNumber()) kid.end = Ms(v["end"].Num());
+        k.kids.push_back(std::move(kid));
+    }
+    return k;
+}
+
+// The session whose card a session's work goes on, of those read here (`ids`): its parent, as Bloom named it (its own
+// answer, else a parent that lists it among its kids); empty when it has none here.
+inline std::string ParentOf(const std::string& id, const std::map<std::string, Kin>& kin, const std::set<std::string>& ids) {
+    if (auto k = kin.find(id); k != kin.end() && !k->second.parent.empty())
+        return ids.count(k->second.parent) && k->second.parent != id ? k->second.parent : std::string();
+    for (auto& [parent, k] : kin) {
+        if (parent == id || !ids.count(parent)) continue;
+        for (const Kid& kid : k.kids)
+            if (kid.session == id) return parent;
+    }
+    return {};
+}
+
+// The card a session's work, requests and questions go on: the one of the session its line of parents starts from
+// (its parent's, or its parent's parent's...), else its own. A line that loops or runs past 8 parents starts nowhere:
+// every session on it keeps its own card (none is left without one).
+inline std::string CardFor(const std::string& id, const std::map<std::string, Kin>& kin, const std::set<std::string>& ids) {
+    std::string at = id;
+    for (int hop = 0; hop < 8; hop++) {
+        std::string up = ParentOf(at, kin, ids);
+        if (up.empty()) return at;
+        if (up == id) break;
+        at = up;
+    }
+    return ParentOf(at, kin, ids).empty() ? at : id;
+}
+
+// A sub-session a card takes in: what Bloom says of it, and its transcript when it is a Claude session read here.
+struct Child {
+    std::string thread, session;
+    std::wstring title;
+    std::string company = "claude", model;
+    bool working = false, asking = false;
+    Ms start = 0;
+    const si::SessionView* view = nullptr;
+};
+
+// The sub-sessions of `main` (every session whose work goes on its card, CardFor: its subs, their subs...): the kids
+// Bloom lists for it and for each of those subs, and the sessions read here whose work goes on its card though no list
+// has them any more (they are done: their steps stay on its card for the turn). A sub is at work only while Bloom lists
+// it as running or asking: a transcript left with its turn open (its Claude Code killed, or stopped from T3) does not
+// keep the card up.
+inline std::vector<Child> ChildrenOf(const std::string& main, const std::map<std::string, Kin>& kin,
+                                     const std::map<std::string, const si::SessionView*>& views) {
+    std::vector<Child> out;
+    std::set<std::string> ids;
+    for (auto& [id, v] : views) ids.insert(id);
+    if (CardFor(main, kin, ids) != main) return out;  // its work, and its subs', is on another card
+    auto ours = [&](const std::string& id) { return id != main && CardFor(id, kin, ids) == main; };
+    auto had = [&](const std::string& session, const std::string& thread) {
+        return std::any_of(out.begin(), out.end(), [&](const Child& c) {
+            return (!session.empty() && c.session == session) || (!thread.empty() && c.thread == thread);
+        });
+    };
+    auto listed = [&](const Kin& k) {
+        for (const Kid& kid : k.kids) {
+            auto v = kid.session.empty() ? views.end() : views.find(kid.session);
+            // One read here whose work goes on another card is that card's.
+            if (kid.session == main || (v != views.end() && !ours(kid.session)) || had(kid.session, kid.thread)) continue;
+            Child ch;
+            ch.thread = kid.thread;
+            ch.session = kid.session;
+            ch.title = kid.title;
+            ch.company = kid.company;
+            ch.model = kid.model;
+            ch.working = kid.Working();
+            ch.asking = kid.state == KidState::Ask;
+            ch.start = kid.start;
+            if (v != views.end()) ch.view = v->second;
+            out.push_back(std::move(ch));
+        }
+    };
+    // The card's own kids first, then its subs'.
+    if (auto k = kin.find(main); k != kin.end()) listed(k->second);
+    for (auto& [id, k] : kin)
+        if (ours(id)) listed(k);
+    for (auto& [id, v] : views) {
+        if (!ours(id) || had(id, {})) continue;
+        Child ch;
+        ch.session = id;
+        ch.title = v->title.empty() ? v->project : v->title;
+        if (v->map.model) ch.model = *v->map.model;
+        ch.asking = v->status == si::SessionState::Ask;
+        ch.start = v->map.turnStartedAt.value_or(0);
+        ch.view = v;
+        out.push_back(std::move(ch));
+    }
+    return out;
+}
+
+// "Codex 하위 · 문서 정리": a sub-session named by its company and title; `waiting`: "Codex 하위가 답을 기다리는 중 ·
+// 문서 정리" (the waiting before the title, which a long one would cut off).
+inline std::wstring SubName(const Child& ch, bool ko, bool waiting = false) {
+    std::wstring who = ch.company == "claude" ? L"Claude" : ch.company == "codex" ? L"Codex" : ch.company == "gemini" ? L"Gemini"
+                                                                                  : Tr(ko, L"다른 AI", L"Other AI");
+    std::wstring sub = waiting ? Tr(ko, L" 하위가 답을 기다리는 중", L" subtask waiting for an answer") : Tr(ko, L" 하위", L" subtask");
+    return who + sub + (ch.title.empty() ? L"" : L" \x00B7 " + ch.title);
+}
+
+// The card's subs taken in: each Claude sub-session's steps since the card's turn began (from its own transcript),
+// marked as that sub's; a sub-session at work with no transcript here (Codex, Gemini) or no steps yet one running step
+// saying who it is. Every step in the order it began; the subs at work counted.
+inline void TakeIn(Card& c, const std::vector<Child>& kids, bool ko) {
+    std::vector<Step> subs;
+    for (const Child& ch : kids) {
+        bool working = ch.working;
+        if (working) c.kidsRunning++;
+        // Its name for its number: its session, else its T3 thread (Bloom may name the session only later; NumberSubs
+        // keeps the number either name got).
+        std::string of = !ch.session.empty() ? "session:" + ch.session
+                         : !ch.thread.empty() ? "thread:" + ch.thread
+                                              : "title:" + si::lotmap::Narrow(ch.title);
+        std::string also = !ch.session.empty() && !ch.thread.empty() ? "thread:" + ch.thread : std::string();
+        size_t had = subs.size();
+        if (ch.view)
+            for (Step& s : StepsOf(ch.view->map, ko, false)) {
+                if (s.startedAt < c.turnStart) continue;
+                s.sub = true;
+                s.subOf = of;
+                s.subAlso = also;
+                subs.push_back(std::move(s));
+            }
+        if (subs.size() == had && working) {
+            Step s;
+            s.icon = Icon::Agent;
+            s.sub = true;
+            s.subOf = of;
+            s.subAlso = also;
+            s.asks = ch.asking;
+            s.done = SubName(ch, ko);
+            s.running = SubName(ch, ko, ch.asking);
+            s.startedAt = std::max(ch.start, c.turnStart);
+            subs.push_back(std::move(s));
+        }
+    }
+    std::stable_sort(subs.begin(), subs.end(), [](const Step& a, const Step& b) { return a.startedAt < b.startedAt; });
+    std::vector<Step> all;
+    all.reserve(c.steps.size() + subs.size());
+    std::merge(c.steps.begin(), c.steps.end(), subs.begin(), subs.end(), std::back_inserter(all),
+               [](const Step& a, const Step& b) { return a.startedAt < b.startedAt; });
+    c.steps = std::move(all);
+}
+
+// The numbers of a card's subs for one turn: each sub keeps the one it got while the turn lasts (the window keeps one
+// of these per card; a new turn starts from 1 again).
+struct SubNumbers {
+    Ms turn = -1;                   // the turn they are for (the card's turnStart)
+    std::map<std::string, int> of;  // by Step::subOf (and Step::subAlso, the same sub's other name)
+    int last = 0;                   // the last number given
+};
+
+// Numbers the card's subs "[S1]", "[S2]"... in the order they first appear on it (their first step's start; at one
+// start, in the steps' order), each sub keeping its number for the turn though others come and go, and though Bloom
+// names its session only after its thread (the number either name got).
+inline void NumberSubs(Card& c, SubNumbers& n) {
+    if (n.turn != c.turnStart) n = {c.turnStart, {}, 0};
+    auto known = [&](const Step& s) {
+        for (const std::string* name : {&s.subOf, &s.subAlso})
+            if (auto it = n.of.find(*name); !name->empty() && it != n.of.end()) return it->second;
+        return 0;
+    };
+    struct Fresh {
+        Ms at;
+        std::string of, also;
+    };
+    std::vector<Fresh> fresh;
+    for (const Step& s : c.steps) {
+        if (!s.sub || known(s)) continue;
+        auto it = std::find_if(fresh.begin(), fresh.end(), [&](const Fresh& f) { return f.of == s.subOf; });
+        if (it == fresh.end()) fresh.push_back({s.startedAt, s.subOf, s.subAlso});
+        else it->at = std::min(it->at, s.startedAt);
+    }
+    std::stable_sort(fresh.begin(), fresh.end(), [](const Fresh& a, const Fresh& b) { return a.at < b.at; });
+    for (const Fresh& f : fresh) {
+        n.of[f.of] = ++n.last;
+        if (!f.also.empty()) n.of[f.also] = n.last;
+    }
+    for (Step& s : c.steps)
+        if (s.sub) {
+            s.subNo = known(s);
+            n.of[s.subOf] = s.subNo;  // both names hold it from now on
+            if (!s.subAlso.empty()) n.of[s.subAlso] = s.subNo;
+        }
+}
+
+// The card with its main session's steps only (card.subtasks off): its subs' steps left out, all else kept (the subs
+// at work counted, their questions and requests on the card, and the one step saying a sub with no transcript here,
+// Codex or Gemini, waits on an answer: nothing else on the card says so).
+inline void HideSubs(Card& c) {
+    std::erase_if(c.steps, [](const Step& s) { return s.sub && !s.asks; });
+}
+
+// Where the words typed in a card's row go (SendSay), and whether they go at all.
+struct SayTo {
+    std::string session;  // the session they go to
+    bool over = false;    // the question they were typed for is over: nothing is sent (as Bloom's "no-question")
+};
+
+// Who the row answers now: the session whose question it was opened for, else the card's own.
+inline std::string RowFor(const std::string& card, bool askOpened, const std::string& askFor) {
+    return askOpened && !askFor.empty() ? askFor : card;
+}
+
+// The words' target: the one the row answered when they were begun (`draftFor`, and `draftAsk`: it was open for a
+// question then; empty: no words kept), else the one it answers now. Words begun for a question that is over, or
+// that the row answers no more (another sub's question took it), are not sent to whoever asks now; words begun for
+// the card's own session go there, a question opening meanwhile or not.
+inline SayTo SayTarget(const std::string& card, const std::string& draftFor, bool draftAsk, bool blank, bool askOpened,
+                       const std::string& askFor) {
+    std::string now = RowFor(card, askOpened, askFor);
+    if (blank || draftFor.empty()) return {now, false};
+    return {draftFor, draftAsk && !(askOpened && now == draftFor)};
+}
+
+// Its subs at work: sub-sessions and its own subagents.
+inline int SubsAtWork(const Card& c) {
+    return c.kidsRunning + c.agentsRunning;
+}
+
+// A turn over while its subs still work is not done: the card works on, saying so, until the last of them ends (no
+// 완료 while subs run). A stopped turn stays stopped. Also notes when its subs' shown steps ended
+// (before HideSubs takes them off), for the time the card says it took. After TakeIn (the sub-sessions counted).
+inline void WorkOn(Card& c) {
+    for (const Step& s : c.steps)
+        if (s.sub && s.endedAt) c.subsEnd = std::max(c.subsEnd, *s.endedAt);
+    if (c.phase == Phase::Done && SubsAtWork(c) > 0) c.phase = Phase::Work;
+}
+
+// Whether a card is still shown at `now`: its turn runs, a sub still works, or it ended (the turn, its subs' last
+// steps, and `lastKid`: when a sub was last seen at work) less than `doneMs` ago.
+inline bool Lingers(const Card& c, Ms now, double doneMs, Ms lastKid = 0) {
+    if (!c.turnEnd || SubsAtWork(c) > 0) return true;
+    Ms end = std::max(*c.turnEnd, lastKid);
+    for (const Step& s : c.steps)
+        if (s.sub && s.endedAt) end = std::max(end, *s.endedAt);
+    return double(now) < double(end) + doneMs;
+}
+
+// Whose a request Bloom passed on under the card's own session is: a subagent's when the tool asking runs only in
+// subagents' loops. The line saying so ("하위 에이전트 · <its Agent call's words>" when one Agent call runs), empty
+// for the main loop's; nothing while no call of that tool runs on the board yet (it is read a moment after).
+inline std::optional<std::wstring> SubagentAsking(const si::Board& b, const std::wstring& tool, bool ko) {
+    std::string t = si::lotmap::Narrow(tool);
+    bool sub = false;
+    const si::Entry* agent = nullptr;
+    int agents = 0;
+    for (const si::Entry& e : b.entries) {
+        bool running = e.status == si::Status::Run && !e.endedAt;
+        if (!running || e.tool.empty()) continue;
+        if (e.tool == t) {
+            if (e.agentId.empty()) return L"";
+            sub = true;
+        }
+        if (e.agentId.empty() && KindOf(e.tool) == Icon::Agent) {
+            agent = &e;
+            agents++;
+        }
+    }
+    if (!sub) return std::nullopt;
+    std::wstring who = Tr(ko, L"하위 에이전트", L"Subagent");
+    return agents == 1 && !agent->label.empty() ? who + L" \x00B7 " + agent->label : who;
 }
 
 }  // namespace rc

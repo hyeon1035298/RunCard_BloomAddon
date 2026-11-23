@@ -20,8 +20,8 @@ public-files.txt                 this list
 .gitignore                       keeps build output out
 
 [private]
-docs/**                          private notes (.git/info/exclude)
+docs/**                          local notes, not in the repository
 mod/si/**                        staged copy of SessionIsland_BloomAddon's headers
 build/**                         build output
 dist/**                          release staging
-pill/**                          the workflow's PillTaskbar_BloomAddon checkout
+pill/**                          a local PillTaskbar_BloomAddon checkout

@@ -30,11 +30,15 @@ design follows the run-status card shared by @eliakuratli; colours and type are
 |---|---|
 | Monitor | main, display 1–4 |
 | Place | eight places (top right) |
+| Arrange | stacked, in a row |
 | Margin | 0–200 (16) |
+| Size | 80–150% (100%) |
 | Open | when pointed at, always |
 | Keep a finished card | 0–600 s (20) |
 | Answer approvals and questions on the card | on |
+| Show sub-task work | off |
 | Theme | Windows taskbar theme, dark, light |
+| Pill length | same length, fit the words |
 
 Answering on the card needs a Bloom with the run-card link (the version after 1.4.3). With an
 older Bloom the cards still show and approvals come as Bloom's cards.

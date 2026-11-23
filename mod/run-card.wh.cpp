@@ -52,9 +52,25 @@ and the status files beside them, and use no tokens. At rest nothing moves or re
     - bottomLeft: 왼쪽 아래
     - bottomCenter: 아래 가운데
     - bottomRight: 오른쪽 아래
+  - arrange: stack
+    $name: 늘어놓기
+    $description: 위·아래 자리에서 카드를 세로로 쌓거나 가로로 한 줄에 놓습니다. 가운데 자리는 세로뿐입니다
+    $options:
+    - stack: 세로
+    - row: 가로
   - margin: 16
     $name: 가장자리 여백
     $description: 화면 가장자리와 카드 사이 (0~200)
+  - size: "100"
+    $name: 크기
+    $description: 카드의 크기(%). 가장자리 여백은 그대로입니다
+    $options:
+    - 80: 80%
+    - 90: 90%
+    - 100: 100%
+    - 110: 110%
+    - 125: 125%
+    - 150: 150%
   - expand: hover
     $name: 펼치기
     $description: 평소에는 한 줄 알약이고 포인터를 올리면 카드로 펼칩니다. 승인·질문과 완료는 저절로 펼칩니다
@@ -67,6 +83,9 @@ and the status files beside them, and use no tokens. At rest nothing moves or re
   - approvals: true
     $name: 카드에서 승인·질문 답하기
     $description: Bloom의 '알림 카드에서 승인'이 받은 요청을 이 카드에서 답합니다
+  - subtasks: false
+    $name: 하위 작업 보기
+    $description: 켜면 하위 에이전트와 하위 세션의 단계도 메인 카드에 보입니다. 하위의 질문·승인은 꺼도 메인 카드에 나옵니다
   $name: 카드
 - pill:
   - theme: system
@@ -76,6 +95,12 @@ and the status files beside them, and use no tokens. At rest nothing moves or re
     - system: Windows 작업표시줄 테마
     - dark: 다크
     - light: 라이트
+  - width: same
+    $name: 알약 길이
+    $description: 접힌 카드(알약)의 길이. 같은 길이면 펼친 카드와 같은 너비이고 넘치는 글은 줄임표로 줄입니다
+    $options:
+    - same: 같은 길이
+    - fit: 내용에 맞춤
   $name: 모양
 */
 // ==/WindhawkModSettings==
@@ -122,6 +147,7 @@ and the status files beside them, and use no tokens. At rest nothing moves or re
 
 #include "si/si_store.h"
 #include "rc_draw.h"
+#include "rc_glass.h"
 #include "rc_link.h"
 #include "rc_model.h"
 #include "rc_place.h"
@@ -195,6 +221,12 @@ bool TestMode() {
     return test;
 }
 
+// Windows' animation effects (Settings > Accessibility > Visual effects), read as each change begins.
+bool Animations() {
+    BOOL on = TRUE;
+    return !SystemParametersInfoW(SPI_GETCLIENTAREAANIMATION, 0, &on, 0) || on;
+}
+
 std::wstring KnownFolder(REFKNOWNFOLDERID id) {
     PWSTR path = nullptr;
     std::wstring out;
@@ -253,11 +285,29 @@ double NowMs() {
     return double(t - 116444736000000000LL) / 10000.0;
 }
 
+// Milliseconds on a clock that only goes forward (since the PC started): the cards' motions and waits are timed on
+// it, so the wall clock set back or on does not stop one halfway or stretch it.
+double TickMs() {
+    static const double perMs = [] {
+        LARGE_INTEGER f;
+        QueryPerformanceFrequency(&f);
+        return double(f.QuadPart) / 1000.0;
+    }();
+    LARGE_INTEGER c;
+    QueryPerformanceCounter(&c);
+    return double(c.QuadPart) / perMs;
+}
+
 std::string Narrow(const std::wstring& w) {
     int n = WideCharToMultiByte(CP_UTF8, 0, w.data(), int(w.size()), nullptr, 0, nullptr, nullptr);
     std::string out(n, '\0');
     WideCharToMultiByte(CP_UTF8, 0, w.data(), int(w.size()), out.data(), n, nullptr, nullptr);
     return out;
+}
+
+// Nothing but spaces and line breaks.
+bool Blank(const std::wstring& s) {
+    return s.find_first_not_of(L" \t\r\n\u3000") == std::wstring::npos;
 }
 
 std::wstring Widen(const std::string& s) {
@@ -276,11 +326,15 @@ enum class ThemeChoice { System, Dark, Light };
 struct Config {
     int monitor = 0;  // Windows' display number; 0 the main monitor
     rc::Anchor anchor = rc::Anchor::TopRight;
+    bool row = false;  // card.arrange: row (else stack); only the top and bottom places (rc::Across)
     float margin = 16;
+    int size = 100;       // card.size, %: the cards drawn this much larger than at the monitor's own scale
     bool always = false;  // card.expand: always (else on hover)
     int doneSeconds = 20;
     bool approvals = true;
+    bool subtasks = false;  // card.subtasks: subs' steps on the main card (else its own only)
     ThemeChoice theme = ThemeChoice::System;
+    bool samePill = true;  // pill.width: same (else fit, as wide as its words)
 };
 
 std::wstring StringSetting(PCWSTR name) {
@@ -295,12 +349,17 @@ Config ReadConfig() {
     std::wstring monitor = StringSetting(L"card.monitor");
     c.monitor = monitor.starts_with(L"display") ? std::clamp(_wtoi(monitor.c_str() + 7), 0, 16) : 0;
     c.anchor = rc::AnchorOf(StringSetting(L"card.position"));
+    c.row = StringSetting(L"card.arrange") == L"row";
     c.margin = float(std::clamp(Wh_GetIntSetting(L"card.margin"), 0, 200));
+    int size = _wtoi(StringSetting(L"card.size").c_str());
+    c.size = size ? std::clamp(size, 80, 150) : 100;
     c.always = StringSetting(L"card.expand") == L"always";
     c.doneSeconds = std::clamp(Wh_GetIntSetting(L"card.doneSeconds"), 0, 600);
     c.approvals = Wh_GetIntSetting(L"card.approvals") != 0;
+    c.subtasks = Wh_GetIntSetting(L"card.subtasks") != 0;
     std::wstring theme = StringSetting(L"pill.theme");
     c.theme = theme == L"dark" ? ThemeChoice::Dark : theme == L"light" ? ThemeChoice::Light : ThemeChoice::System;
+    c.samePill = StringSetting(L"pill.width") != L"fit";
     return c;
 }
 
@@ -364,19 +423,48 @@ std::wstring BloomSettingsPath() {
     return KnownFolder(FOLDERID_RoamingAppData) + L"\\Bloom\\settings.json";
 }
 
-AccentPair ReadAccent() {
-    if (auto text = ReadText(BloomSettingsPath(), 4 * 1024 * 1024)) {
-        wdj::JsonObject o{nullptr};
-        if (wdj::JsonObject::TryParse(*text, o)) {
-            auto str = [&](PCWSTR name, PCWSTR fallback) {
-                return o.HasKey(name) && o.GetNamedValue(name).ValueType() == wdj::JsonValueType::String
-                           ? std::wstring(o.GetNamedString(name))
-                           : std::wstring(fallback);
-            };
-            return BloomAccent(str(L"accent", L"rose"), str(L"accentCustom", L"")).value_or(AccentPair{0xFFFF7A9E, 0xFFE04E78});
-        }
-    }
-    return {0xFFFF7A9E, 0xFFE04E78};
+// What the cards take from Bloom's settings.json: its accent, and its glass (유리 효과 "transparency": "system" or
+// "off"; 유리 투명도 "glassTransparency", 15-75, default 30).
+struct BloomPrefs {
+    AccentPair accent{0xFFFF7A9E, 0xFFE04E78};
+    bool transparency = true;
+    int glassTransparency = 30;
+};
+
+BloomPrefs ReadBloom() {
+    BloomPrefs b;
+    auto text = ReadText(BloomSettingsPath(), 4 * 1024 * 1024);
+    wdj::JsonObject o{nullptr};
+    if (!text || !wdj::JsonObject::TryParse(*text, o)) return b;
+    auto str = [&](PCWSTR name, PCWSTR fallback) {
+        return o.HasKey(name) && o.GetNamedValue(name).ValueType() == wdj::JsonValueType::String
+                   ? std::wstring(o.GetNamedString(name))
+                   : std::wstring(fallback);
+    };
+    b.accent = BloomAccent(str(L"accent", L"rose"), str(L"accentCustom", L"")).value_or(b.accent);
+    b.transparency = str(L"transparency", L"system") != L"off";
+    if (o.HasKey(L"glassTransparency") && o.GetNamedValue(L"glassTransparency").ValueType() == wdj::JsonValueType::Number)
+        b.glassTransparency = int(std::lround(o.GetNamedNumber(L"glassTransparency")));
+    return b;
+}
+
+// Windows' 투명 효과 (Personalization > Colors), on when it isn't set, as Bloom reads it.
+bool SystemTransparency() {
+    DWORD value = 1, size = sizeof(value);
+    return RegGetValueW(HKEY_CURRENT_USER, L"Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize",
+                        L"EnableTransparency", RRF_RT_REG_DWORD, nullptr, &value, &size) != ERROR_SUCCESS ||
+           value != 0;
+}
+
+DWORD WindowsBuild() {
+    static const DWORD build = [] {
+        using Fn = LONG(WINAPI*)(PRTL_OSVERSIONINFOW);
+        RTL_OSVERSIONINFOW v{};
+        v.dwOSVersionInfoSize = sizeof(v);
+        auto f = reinterpret_cast<Fn>(GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "RtlGetVersion"));
+        return f && f(&v) == 0 ? v.dwBuildNumber : 0ul;
+    }();
+    return build;
 }
 
 // The taskbar's own theme, for pill.theme = system.
@@ -426,6 +514,7 @@ struct Status {
     std::string session;
     DWORD pid = 0;
     bool interactive = true;
+    bool cli = false;       // entrypoint "cli": Claude Code in a terminal, reading its console (Stop can reach it)
     bool bloomRun = false;  // one of Bloom's own runs (its AI chats, its usage looks): never a card, as in Bloom's notices
     bool waiting = false;  // its status: it waits for the person (a permission, a question)
     uint64_t procStart = 0;
@@ -485,6 +574,7 @@ std::optional<Status> ReadStatus(const std::wstring& path) {
         s.pid = DWORD(o.GetNamedNumber(L"pid", 0));
         std::wstring kind(o.GetNamedString(L"kind", L"interactive"));
         s.interactive = kind == L"interactive";
+        s.cli = std::wstring(o.GetNamedString(L"entrypoint", L"")) == L"cli";
         s.bloomRun = SameFolder(std::wstring(o.GetNamedString(L"cwd", L"")), BloomWorkDir());
         std::wstring status(o.GetNamedString(L"status", L""));
         for (auto& ch : status) ch = towlower(ch);
@@ -554,19 +644,38 @@ constexpr PCWSTR kClass = L"RunCardWindow_" WH_MOD_ID;
 constexpr UINT kSnapshotMsg = WM_APP + 1;  // wParam: the folder's index, lParam: a boxed snapshot
 constexpr UINT kSettingsMsg = WM_APP + 2;
 constexpr UINT kLinkMsg = WM_APP + 3;      // rc::Link's messages
-constexpr UINT_PTR kTickTimer = 1, kLeaveTimer = 2, kRegionTimer = 3, kMorphTimer = 4;
+constexpr UINT kEditMsg = WM_APP + 4;      // 보내기's edit box lost the keys
+constexpr double kNoteMs = 3000;           // what came of a send stays in its row this long
+constexpr double kSayWaitMs = 60000;       // a send Bloom has not answered by then did not go
+constexpr int kSayMax = 20000;             // the most characters a send carries (Bloom takes no more)
+constexpr UINT_PTR kTickTimer = 1, kLeaveTimer = 2, kRegionTimer = 3, kMorphTimer = 4, kEdgeTimer = 5, kPageTimer = 6;
+constexpr UINT kPageMs = 320;     // a question picked, the card turns to the next one this much later (the pick seen)
+constexpr UINT kEdgeMs = 120;      // what lies along the edges is read this often while there are cards (they follow it)
+constexpr int kEdgeRescan = 4;     // ... and its windows are looked for again every so many reads (as Session Island)
+// A window of them destroyed (PillTaskbar builds its island window anew on most of its setting changes, Bloom's theme
+// among them): they are looked for at every read until as many are there again, this long at most, the cards keeping
+// clear of what it covered meanwhile.
+constexpr double kEdgeBackMs = 3000;
 constexpr UINT kTickMs = 1000;    // the clocks move by the second
 constexpr int kStatusEvery = 2;   // status files are looked at every second tick
 constexpr UINT kLeaveMs = 300;    // a card the pointer left folds this much later
-constexpr int kMorphMs = 220;     // a card opening or folding, the stack moving
+constexpr int kMorphMs = int(rc::kOpenMs);  // a card opening, the stack moving
+constexpr int kFoldMs = int(rc::kFoldMs);   // a card folding
 constexpr int kFadeMs = 160;      // a card coming or going
 constexpr double kOrphanMs = 180000;  // an open turn with no session file and no line for this long has ended
+constexpr double kStopWaitMs = 5000;  // a Stop pressed waits this long for the turn to end before it can be pressed again
 constexpr float kGap = 8;         // between stacked cards
 constexpr double kRingTurnMs = 1000;
 constexpr double kFrameMs = 1000.0 / 60;  // the ring turns at most 60 times a second
 constexpr int kMaxCards = 6;
+// A session Bloom said takes no words is asked again this long after its card came (T3 Code may not have written the
+// thread yet when first asked), then no more until its next turn: each ask is a read of T3 Code's state.
+constexpr double kCanAgainMs[] = {2000, 10000};
 constexpr int kRescanTicks = 300;  // the Claude folders are looked for again every five minutes
-constexpr float kEase[4] = {0.1f, 0.9f, 0.2f, 1.0f};  // PillTaskbar kIslandEase, "Fluent decelerate"
+// Bloom's `kin` (a session's parent and sub-sessions in T3 Code): asked when a card comes and this often while it is
+// there; a new card waits this long for the answer (a sub-session's gets none of its own), once Bloom answers `kin`.
+constexpr double kKinEveryMs = 3000;
+constexpr double kKinWaitMs = 800;
 
 std::atomic<HWND> g_window{};
 HANDLE g_stop = nullptr;
@@ -598,10 +707,11 @@ private:
         rc::Pointer ptr;
         rc::Laid laid;
         rc::Box box;          // where it is going, DIPs in the window
+        rc::Box from;         // where it was before its latest move (the region covers the way between)
         rc::Size clipTo;      // the size its clip shows or is animating to
         bool placed = false;  // has been put somewhere once
         std::string key;      // what the picture was drawn from
-        double foldAt = 0;    // a folding card is drawn as a pill from then on
+        double foldAt = 0;    // a folding card is drawn as a pill from then on (Tick, as every motion and wait here)
         wuc::ContainerVisual root{nullptr};
         wuc::SpriteVisual sprite{nullptr};
         wuc::CompositionDrawingSurface surf{nullptr};
@@ -609,18 +719,73 @@ private:
         wuc::ShapeVisual ring{nullptr};
         wuc::CompositionEllipseGeometry ringGeom{nullptr};
         wuc::CompositionColorBrush ringBrush{nullptr};
+        wuc::SpriteVisual glass{nullptr};  // the blur behind the card (Bloom's glass), under its picture
         bool spinning = false;
+        double stopAt = 0;  // Stop was pressed then: the button waits a while (a second Esc opens Claude Code's rewind)
+        // Its changes (rc::Motion): when each began (Tick) and the card (and Bloom's request) it began from.
+        std::optional<rc::Ask> ask;  // Bloom's request as last laid out
+        rc::Card titleWas, rowsWas, buttonsWas;
+        std::optional<rc::Ask> titleAsk, buttonsAsk;
+        double openAt = 0, foldStart = 0, titleAt = 0, rowsAt = 0, buttonsAt = 0, dotAt = 0, checkAt = 0, sizeAt = 0;
+        // 보내기's own change (rc::Motion::say): the row opened by the button (sayIntent +1) or closed unsent (-1) since
+        // the last change, and the row it began from.
+        rc::Card sayWas;
+        double sayAt = 0;
+        float sayTurn = -1;  // ... it began turned back halfway, at this much of its way, from these fades (rc::SayFades)
+        rc::SayFade sayTurnWas;
+        bool sayBack = false;
+        int sayIntent = 0;
+        float wasW = 0;          // a pill's width before its words changed it
+        float pillW = 0;         // the pill it opened from or folds into
+        bool animating = false;  // drawn every frame until its changes are over
+        // The light over a working headline: its words drawn bright, shown through a band sweeping across.
+        wuc::SpriteVisual shine{nullptr};
+        wuc::CompositionSurfaceBrush shineWords{nullptr};
+        wuc::CompositionDrawingSurface shineSurf{nullptr};
+        wuc::CompositionLinearGradientBrush band{nullptr};
+        std::string shineKey;
+        bool shining = false;
+        // 보내기 (a T3 session's card): Bloom's word on it, its row to type in, and what came of a send.
+        bool canSay = false;     // Bloom said the session takes words
+        bool canStop = false;    // ... and a stop (T3 Code interrupts the thread's turn)
+        bool canAsked = false;   // ... asked over this connection, for this turn
+        rc::Ms canTurn = 0;      // the turn it was asked for
+        int canAgain = 0;        // asked again since it came (kCanAgainMs)
+        double madeAt = 0;       // when its card came
+        bool composing = false;  // its row is the box to type in
+        bool askOpened = false;  // the row was opened for the question the session waits on (once a question)
+        std::string askFor;      // ... the session asking: the card's own, or a sub-session of it (the answer goes there)
+        double kidsAt = 0;       // when a sub-session of it was last seen at work (Now: the card stays doneSeconds past it)
+        std::wstring draft;      // the words typed, while the edit box is elsewhere
+        std::string draftFor;    // ... the session the row answered when they were begun (empty: no words); they go there
+        bool draftAsk = false;   // ... and it was open for that session's question then (rc::SayTarget)
+        std::wstring sent;       // the words gone to Bloom: back in the box when they did not go
+        std::string sentFor;     // ... and their draftFor, draftAsk, back with them
+        bool sentAsk = false;
+        std::wstring note;       // what came of the send, shown a while
+        bool noteBad = false;
+        bool sending = false;
+        double noteAt = 0;
     };
 
     Config cfg_;
     rc::Palette look_{};
+    bool glass_ = false;  // the cards are glass, as Bloom's windows are now
     uint64_t lookId_ = 0;
     FILETIME bloomSeen_{};
     std::vector<Folder> folders_;
     std::vector<std::unique_ptr<Slot>> slots_;
     std::map<std::string, rc::Ask> asks_;  // Bloom's requests, by session
-    std::map<std::string, rc::Ms> dismissed_;  // finished cards closed by hand: the session and its turn's end
+    std::map<std::string, rc::Ms> dismissed_;  // cards closed by hand: the session and its turn's start
     std::set<std::string> bloomRuns_;          // sessions seen working in Bloom's own folder
+    // Bloom's `kin` answers by session (a T3 session's parent and sub-sessions), and when each session was last asked.
+    std::map<std::string, rc::Kin> kin_;
+    std::map<std::string, double> kinAsked_;  // (Tick)
+    // The sessions a card may be for (Update's, as it last read them): a session's parent and card are looked for
+    // among these, by Update and by Bloom's lines alike.
+    std::set<std::string> ids_;
+    std::map<std::string, rc::SubNumbers> subNos_;  // each card's subs' numbers for its turn ("[S1]"), by session
+    bool kinHeard_ = false;  // this Bloom answers `kin`: a new card waits a moment for its answer
     uint64_t arrivals_ = 0;
     int ticks_ = 0;
     bool hidden_ = false;
@@ -628,11 +793,37 @@ private:
     HWND hwnd_ = nullptr;
     HMONITOR monitor_ = nullptr;
     RECT work_{};
-    float scale_ = 1;
-    rc::Box area_;  // the work area in the window, DIPs
+    float scale_ = 1;  // the monitor's scale × card.size
+    rc::Box area_;  // the work area in the window, in the cards' DIPs (scale_)
+    rc::Box mon_;   // the monitor, in the same units
+    rc::Box room_;  // the part of the area the cards keep to: clear of what lies along the edges (rc::Clear)
+    std::vector<rc::Box> edges_;  // what lies along the monitor's edges now (Obstacles)
+    std::vector<std::pair<HWND, bool>> edgeWindows_;  // their windows, and whether only a window's region counts
+    int edgeScan_ = 0;
+    double edgeBackUntil_ = 0;  // a window of them destroyed: looked for until then (kEdgeBackMs)
+    size_t edgeWant_ = 0;       // ... until there are as many as this again
+    bool edgesStale_ = true;    // not read while there were no cards
     bool tracking_ = false;
     std::optional<std::pair<std::string, rc::Act>> press_;
+    // A question just picked, the card to turn on from it (kPageTimer): the card, the request, the question.
+    struct Turn {
+        std::string card, ask;
+        int from = 0;
+    };
+    std::optional<Turn> turn_;
     rc::Link link_;
+    // The edit box 보내기 types in: a window of its own (the cards' window takes no keys, nor the IME), over one
+    // card's row while it has the keys.
+    HWND edit_ = nullptr;
+    WNDPROC editProc_ = nullptr;
+    std::string editFor_;    // the session whose row it is over
+    HWND before_ = nullptr;  // the window that had the keys before it
+    HFONT editFont_ = nullptr;
+    float editScale_ = 0;
+    int editLineH_ = 0;
+    RECT editAt_{};
+    HBRUSH editBrush_ = nullptr;
+    uint32_t editBg_ = 0;
 
     com_ptr<ID2D1Factory1> d2d_;
     com_ptr<IDWriteFactory> dwrite_;
@@ -648,9 +839,16 @@ private:
     wuc::CompositionGraphicsDevice graphics_{nullptr};
     wuc::ContainerVisual rootVisual_{nullptr};
     wuc::ImplicitAnimationCollection moves_{nullptr};
+    wuc::CompositionBackdropBrush backdrop_{nullptr};  // what is behind the window, blurred (every glass shares it)
+    wuc::CompositionEffectBrush frost_{nullptr};       // backdrop_ with the theme's luminosity layer (rc_glass.h)
+    bool frostLight_ = false;                          // the theme frost_ was made for
+    float frostAmount_ = -1;                           // ... and its luminosity layer's amount (rc::glass::Amount)
+    bool plainGlass_ = false;                          // the effect failed: the glass is backdrop_ alone
 
     // ---- helpers ----
     void ReadLook(bool force);
+    void Frost(bool light, float amount);
+    wuc::CompositionBrush GlassBrush() const;
     void StartReaders();
     void StopReaders();
     void ReadStatus();
@@ -661,27 +859,64 @@ private:
     void Draw(Slot& s, rc::View view);
     void MakeVisuals(Slot& s);
     void Spin(Slot& s, bool on);
-    void AnimateClip(Slot& s, rc::Size from, float fromR, rc::Size to, float toR);
+    void Shine(Slot& s);
+    void Changes(Slot& s, const rc::Card& next, const rc::Ask* ask, double now);
+    rc::Motion MotionOf(const Slot& s, double now) const;
+    bool Moving(const Slot& s, double now) const;
+    double SayEnd(const Slot& s) const;
+    void AnimateClip(Slot& s, rc::Size from, float fromR, rc::Size to, float toR, double ms, const float (&ease)[4]);
     void FadeOut(Slot& s);
     void SetRegion(bool moving);
     void ArmFrames();
     std::string KeyOf(const Slot& s, rc::View view) const;
     Slot* Find(const std::string& id);
+    std::string CardFor(const std::string& session) const;
+    std::wstring SubWho(const std::string& session) const;
     Slot* At(POINT client, rc::Hit* hit);
     void OnMouse(UINT msg, LPARAM lParam);
     void OnLeave();
     void Act(Slot& s, const rc::Hit& hit);
+    void PageTurn();
     void Open(Slot& s);
+    void StopTurn(Slot& s);
+    void NotStopped(Slot& s, const std::wstring& why);
+    void Dismiss(Slot& s);
     void Answer(Slot& s, const std::string& json);
+    bool WantsOpen(const Slot& s) const;
+    void SayState(Slot& s, rc::Card& c, double now);
+    void SyncSay(Slot& s);
+    void Compose(Slot& s);
+    void Attach(Slot& s);
+    void Detach(bool giveBack);
+    void PlaceEdit();
+    std::wstring EditText() const;
+    void SendSay(Slot& s);
+    void Said(Slot& s, bool ok, const std::wstring& word);
+    void OnEditKey(WPARAM key);
+    void OnEditBlur();
+    void OnEditChange();
+    LRESULT EditColors(HDC dc);
+    static LRESULT CALLBACK EditProc(HWND, UINT, WPARAM, LPARAM);
     void OnLink(WPARAM what, std::string* line);
     void OnSnapshot(size_t folder, std::shared_ptr<const si::Snapshot> s);
     void OnSettings();
     void CheckFullscreen();
+    void FindEdgeWindows();
+    std::vector<rc::Box> Obstacles();
+    std::vector<rc::Box> EdgesNow();
+    void CheckEdges();
     bool DeviceLost(HRESULT hr) const {
         return hr == DXGI_ERROR_DEVICE_REMOVED || hr == DXGI_ERROR_DEVICE_RESET || hr == D2DERR_RECREATE_TARGET;
     }
     void Recover();
+    // The transcripts' clock (a turn's and a step's times, the clocks drawn), and the one the motions and waits go by.
     double Now() const { return NowMs(); }
+    double Tick() const { return TickMs(); }
+    // The margin is the screen's (DIPs), whatever the cards' size.
+    float Margin() const { return cfg_.margin * 100.0f / float(cfg_.size); }
+    // Every pill's width with pill.width = same: a card's, or in a row a shorter one, so folding a card narrows the
+    // row; 0 with fit.
+    float PillW() const { return !cfg_.samePill ? 0 : rc::Across(cfg_.anchor, cfg_.row) ? rc::kRowPillW : rc::kCardW; }
 };
 
 App* g_app = nullptr;
@@ -737,6 +972,8 @@ bool App::Start() {
     DwmSetWindowAttribute(hwnd_, DWMWA_TRANSITIONS_FORCEDISABLED, &on, sizeof(on));
     DWM_WINDOW_CORNER_PREFERENCE corners = DWMWCP_DONOTROUND;
     DwmSetWindowAttribute(hwnd_, DWMWA_WINDOW_CORNER_PREFERENCE, &corners, sizeof(corners));
+    // The glass: a host backdrop brush draws what is behind the window only once the window allows it.
+    DwmSetWindowAttribute(hwnd_, 17 /* DWMWA_USE_HOSTBACKDROPBRUSH */, &on, sizeof(on));
 
     comp_ = wuc::Compositor();
     check_hresult(
@@ -744,9 +981,15 @@ bool App::Start() {
     check_hresult(comp_.as<interop::ICompositorInterop>()->CreateGraphicsDevice(device_.get(), winrt::put_abi(graphics_)));
     rootVisual_ = comp_.CreateContainerVisual();
     target_.Root(rootVisual_);
+    try {
+        backdrop_ = comp_.CreateHostBackdropBrush();
+    } catch (...) {
+        Wh_Log(L"no host backdrop: the cards stay solid");
+    }
     // A card moving to its new place in the stack glides there.
     auto move = comp_.CreateVector3KeyFrameAnimation();
-    move.InsertExpressionKeyFrame(1, L"this.FinalValue", comp_.CreateCubicBezierEasingFunction({kEase[0], kEase[1]}, {kEase[2], kEase[3]}));
+    move.InsertExpressionKeyFrame(1, L"this.FinalValue",
+                                  comp_.CreateCubicBezierEasingFunction({rc::kEase[0], rc::kEase[1]}, {rc::kEase[2], rc::kEase[3]}));
     move.Duration(std::chrono::milliseconds(kMorphMs));
     move.Target(L"Offset");
     moves_ = comp_.CreateImplicitAnimationCollection();
@@ -756,6 +999,7 @@ bool App::Start() {
     if (!frameTimer_) frameTimer_ = CreateWaitableTimerExW(nullptr, nullptr, 0, TIMER_ALL_ACCESS);
 
     cfg_ = ReadConfig();
+    painter_->SamePill(PillW());
     ReadLook(true);
     Place();
     SetRegion(false);
@@ -764,6 +1008,7 @@ bool App::Start() {
     ReadStatus();
     link_.Start(hwnd_, kLinkMsg);
     SetTimer(hwnd_, kTickTimer, kTickMs, nullptr);
+    SetTimer(hwnd_, kEdgeTimer, kEdgeMs, nullptr);
     Wh_Log(L"started: %d folders", int(folders_.size()));
     return true;
 }
@@ -787,16 +1032,24 @@ void App::Stop() {
     step(L"composition", [&] {
         rootVisual_ = nullptr;
         moves_ = nullptr;
+        frost_ = nullptr;
+        backdrop_ = nullptr;
         if (target_) target_.Root(nullptr);
         target_ = nullptr;
         graphics_ = nullptr;
         comp_ = nullptr;
     });
+    if (edit_) DestroyWindow(edit_);
+    edit_ = nullptr;
     if (hwnd_) {
         g_window = nullptr;
         DestroyWindow(hwnd_);
         hwnd_ = nullptr;
     }
+    if (editFont_) DeleteObject(editFont_);
+    if (editBrush_) DeleteObject(editBrush_);
+    editFont_ = nullptr;
+    editBrush_ = nullptr;
     UnregisterClassW(kClass, ModuleInstance());
     if (frameTimer_) CloseHandle(frameTimer_);
     frameTimer_ = nullptr;
@@ -815,12 +1068,45 @@ void App::ReadLook(bool force) {
     FILETIME t = FileTime(BloomSettingsPath());
     if (!force && SameTime(t, bloomSeen_)) return;
     bloomSeen_ = t;
-    AccentPair a = ReadAccent();
+    BloomPrefs b = ReadBloom();
     bool light = cfg_.theme == ThemeChoice::Light || (cfg_.theme == ThemeChoice::System && SystemLight());
-    rc::Palette p = rc::MakePalette(light, light ? a.light : a.dark);
-    if (!force && memcmp(&p, &look_, sizeof(p)) == 0) return;
+    // Glass as Bloom's own windows are (Theme.Acrylic): 유리 효과 on, Windows' transparency on, Windows 11 22H2 on.
+    bool glass = backdrop_ && b.transparency && SystemTransparency() && WindowsBuild() >= 22621;
+    if (glass) Frost(light, rc::glass::Amount(b.glassTransparency));
+    // Without the luminosity layer only a thin see-through keeps the text on any window behind.
+    int see = !glass ? -1 : plainGlass_ ? std::min(b.glassTransparency, 13) : b.glassTransparency;
+    rc::Palette p = rc::MakePalette(light, light ? b.accent.light : b.accent.dark, see);
+    if (!force && glass == glass_ && memcmp(&p, &look_, sizeof(p)) == 0) return;
     look_ = p;
+    glass_ = glass;
     lookId_++;
+    auto brush = GlassBrush();
+    for (auto& s : slots_)
+        if (s->glass) {
+            s->glass.Brush(brush);
+            s->glass.IsVisible(glass_);
+        }
+}
+
+// The glass brush for the theme and the see-through, made again only when either changes. If composition can't run
+// the effect, the glass stays the plain backdrop from then on.
+void App::Frost(bool light, float amount) {
+    if (plainGlass_ || (frost_ && frostLight_ == light && frostAmount_ == amount)) return;
+    try {
+        if (TestMode() && Env(L"RUN_CARD_GLASS") == L"plain") winrt::throw_hresult(E_NOTIMPL);
+        frost_ = rc::glass::Make(comp_, backdrop_, light, amount);
+        frostLight_ = light;
+        frostAmount_ = amount;
+    } catch (...) {
+        frost_ = nullptr;
+        plainGlass_ = true;
+        Wh_Log(L"no luminosity layer (0x%08X): plain glass, see-through at most 13", unsigned(winrt::to_hresult()));
+    }
+}
+
+wuc::CompositionBrush App::GlassBrush() const {
+    if (frost_) return frost_;
+    return backdrop_;
 }
 
 // ---- Claude Code's folders ----------------------------------------------------------------------------------
@@ -888,6 +1174,8 @@ const Status* App::StatusOf(const std::string& session) const {
 // ---- the window on its monitor --------------------------------------------------------------------------------
 
 void App::Place() {
+    HMONITOR was = monitor_;
+    RECT workWas = work_;
     monitor_ = rc::MonitorByNumber(cfg_.monitor);
     MONITORINFO mi{};
     mi.cbSize = sizeof(mi);
@@ -895,11 +1183,18 @@ void App::Place() {
     work_ = mi.rcWork;
     UINT dx = 96, dy = 96;
     GetDpiForMonitor(monitor_, MDT_EFFECTIVE_DPI, &dx, &dy);
-    float scale = dx / 96.0f;
+    float scale = dx / 96.0f * float(cfg_.size) / 100.0f;
     bool rescaled = scale != scale_;
     scale_ = scale;
     int w = work_.right - work_.left, h = work_.bottom - work_.top;
     area_ = {0, 0, w / scale_, h / scale_};
+    const RECT& m = mi.rcMonitor;
+    mon_ = {(m.left - work_.left) / scale_, (m.top - work_.top) / scale_, (m.right - m.left) / scale_, (m.bottom - m.top) / scale_};
+    edgeScan_ = 0;  // the windows looked for again at the next read
+    edgesStale_ = true;
+    // Kept clear of while a window is looked for (EdgesNow), in the window's units: none once they change.
+    if (monitor_ != was || rescaled || !EqualRect(&work_, &workWas)) edges_.clear();
+    room_ = area_;
     SetWindowPos(hwnd_, HWND_TOPMOST, work_.left, work_.top, w, h, SWP_NOACTIVATE);
     if (rescaled)
         for (auto& s : slots_) {
@@ -916,24 +1211,70 @@ App::Slot* App::Find(const std::string& id) {
     return nullptr;
 }
 
+// The session whose card shows a session's requests and questions: its own, or the one it is a sub-session of (among
+// the sessions Update took, as its cards have them).
+std::string App::CardFor(const std::string& session) const {
+    return rc::CardFor(session, kin_, ids_);
+}
+
+// The line over a sub-session's request or question on its parent's card: "하위 · <its thread's title>".
+std::wstring App::SubWho(const std::string& session) const {
+    std::wstring title;
+    for (auto& [parent, k] : kin_)
+        for (const rc::Kid& kid : k.kids)
+            if (kid.session == session && title.empty()) title = kid.title;
+    for (auto& f : folders_)
+        if (f.snap && title.empty())
+            for (const si::SessionView& v : f.snap->sessions)
+                if (v.id == session) title = v.title.empty() ? v.project : v.title;
+    return rc::Tr(g_korean, L"하위", L"Subtask") + (title.empty() ? L"" : L" \x00B7 " + title);
+}
+
 void App::Update() {
     if (!comp_) return;
-    double now = Now();
+    double now = Now(), tick = Tick();
     bool ko = g_korean;
-    // The sessions worth a card: one whose turn runs, or ended a little while ago.
-    struct Seen {
-        rc::Card card;
-        DWORD pid;
-    };
-    std::map<std::string, Seen> seen;
+    // The sessions a card may be for: each one read here with a turn (the first folder's), but `claude -p` runs and
+    // programs' sessions, and Bloom's own chats (Bloom shows them itself).
+    std::map<std::string, const si::SessionView*> views;
     for (auto& f : folders_) {
         if (!f.snap) continue;
         for (const si::SessionView& v : f.snap->sessions) {
-            if (!v.map.turnStartedAt || seen.count(v.id)) continue;
+            if (!v.map.turnStartedAt || views.count(v.id)) continue;
             const Status* st = StatusOf(v.id);
-            if (st && !st->interactive) continue;  // `claude -p` runs, programs' sessions
-            if (bloomRuns_.count(v.id)) continue;   // Bloom's own chats: Bloom shows them itself
-            rc::Card c = rc::CardOf(v, ko);
+            if ((st && !st->interactive) || bloomRuns_.count(v.id)) continue;
+            views[v.id] = &v;
+        }
+    }
+    std::set<std::string> ids;
+    for (auto& [id, v] : views) ids.insert(id);
+    ids_ = ids;
+    for (auto it = kin_.begin(); it != kin_.end();) it = ids.count(it->first) ? std::next(it) : kin_.erase(it);
+    for (auto it = kinAsked_.begin(); it != kinAsked_.end();) it = ids.count(it->first) ? std::next(it) : kinAsked_.erase(it);
+    for (auto it = subNos_.begin(); it != subNos_.end();) it = ids.count(it->first) ? std::next(it) : subNos_.erase(it);
+    // The sessions worth a card: one whose turn runs, or ended a little while ago, or whose sub-sessions still work.
+    // A sub-session (its line of parents read here) has none of its own: its steps are on the card of the session the
+    // line starts from (CardFor), with its parent's and theirs.
+    struct Seen {
+        rc::Card card;
+        DWORD pid;
+        std::string subAsker;  // a sub-session of it waits on a question (its transcript says so)
+        std::wstring subWho;   // ... the line saying whose
+    };
+    std::map<std::string, Seen> seen;
+    std::vector<std::string> kinFor;  // the sessions Bloom is asked `kin` of now
+    std::set<std::string> waiting;    // new cards waiting for Bloom's `kin`
+    for (auto& [vid, vp] : views) {
+        {
+            const si::SessionView& v = *vp;
+            if (rc::CardFor(v.id, kin_, ids) != v.id) {
+                kinFor.push_back(v.id);
+                continue;
+            }
+            const Status* st = StatusOf(v.id);
+            rc::Card c = rc::CardOf(v, ko, rc::Ms(now));
+            // Its subagents end with its Claude Code (gone, or no session file and nothing written for minutes).
+            if ((st && !st->alive) || (!st && now - double(v.lastActivity) > kOrphanMs)) c.agentsRunning = 0;
             if (!c.turnEnd && st && !st->alive) {
                 // Claude Code is gone with the turn open: closed or killed.
                 c.phase = rc::Phase::Stopped;
@@ -949,17 +1290,56 @@ void App::Update() {
                 c.asking = true;
                 c.phase = rc::Phase::Ask;
             }
-            // Closed by hand: stays closed until the session's next turn ends differently.
+            // Its sub-sessions' work among its steps (theirs too); the first of them at work waiting on a question, for
+            // its row.
+            std::vector<rc::Child> kids = rc::ChildrenOf(v.id, kin_, views);
+            rc::TakeIn(c, kids, ko);
+            rc::WorkOn(c);
+            rc::NumberSubs(c, subNos_[v.id]);
+            std::string subAsker;
+            std::wstring subWho;
+            for (const rc::Child& ch : kids) {
+                kinFor.push_back(ch.session);
+                if (!subAsker.empty() || !ch.working || !ch.view || ch.view->map.turnEndedAt) continue;
+                rc::Card cc = rc::CardOf(*ch.view, ko);
+                if (cc.asking && !cc.askingPlan) {
+                    subAsker = ch.session;
+                    subWho = SubWho(ch.session);
+                }
+            }
+            // Closed by hand: stays closed for the rest of that turn, its end included; the next turn shows again.
             if (auto d = dismissed_.find(v.id); d != dismissed_.end()) {
-                if (c.turnEnd && *c.turnEnd == d->second) continue;
+                if (c.turnStart == d->second) continue;
                 dismissed_.erase(d);
             }
             Slot* slot = Find(v.id);
+            if (slot && rc::SubsAtWork(c) > 0) slot->kidsAt = now;
+            // A sub with no transcript here (Codex, Gemini) leaves no step that ends: the time its card last saw subs at
+            // work in this turn counts as when they ended (the clock, the time the card says it all took).
+            if (slot && c.turnEnd && slot->kidsAt >= double(c.turnStart))
+                c.subsEnd = std::max(c.subsEnd, rc::Ms(slot->kidsAt));
             bool held = slot && slot->hover;
-            if (c.turnEnd && now >= double(*c.turnEnd) + cfg_.doneSeconds * 1000.0 && !held) continue;
-            seen[v.id] = {std::move(c), st ? st->pid : 0};
+            if (!held && !rc::Lingers(c, rc::Ms(now), cfg_.doneSeconds * 1000.0, slot ? rc::Ms(slot->kidsAt) : 0)) continue;
+            // card.subtasks off: the main session's steps only (after Lingers, which goes by the subs' last steps too).
+            if (!cfg_.subtasks) rc::HideSubs(c);
+            kinFor.push_back(v.id);
+            // A new card waits a moment for Bloom to say whether the session is a sub-session (then it gets none).
+            if (!slot && link_.Up() && kinHeard_ && !kin_.count(v.id)) {
+                auto asked = kinAsked_.find(v.id);
+                if (asked == kinAsked_.end() || tick - asked->second < kKinWaitMs) waiting.insert(v.id);
+            }
+            seen[v.id] = {std::move(c), st ? st->pid : 0, std::move(subAsker), std::move(subWho)};
         }
     }
+    // Bloom is asked `kin` of each card's session (and its sub-sessions) when it comes, then every few seconds.
+    if (link_.Up())
+        for (const std::string& id : kinFor) {
+            if (id.empty() || !ids.count(id)) continue;
+            auto at = kinAsked_.find(id);
+            if (at != kinAsked_.end() && tick - at->second < kKinEveryMs) continue;
+            if (link_.Send(rc::SessionLine("kin", id))) kinAsked_[id] = tick;
+        }
+    for (const std::string& id : waiting) seen.erase(id);
     // Bloom's requests for sessions no longer shown go back to Bloom.
     for (auto it = asks_.begin(); it != asks_.end();) {
         if (!seen.count(it->first)) {
@@ -978,16 +1358,68 @@ void App::Update() {
             auto made = std::make_unique<Slot>();
             made->id = id;
             made->order = ++arrivals_;
+            made->madeAt = tick;
             s = made.get();
             MakeVisuals(*s);
             slots_.push_back(std::move(made));
         }
-        s->card = std::move(sn.card);
+        rc::Card next = std::move(sn.card);
         s->pid = sn.pid;
-        if (asks_.count(id)) s->card.phase = rc::Phase::Approve;
-        rc::Phase p = s->card.phase;
-        bool pinned = p == rc::Phase::Approve || p == rc::Phase::Ask || p == rc::Phase::Done || p == rc::Phase::Stopped;
-        s->wantOpen = cfg_.always || s->hover || pinned;
+        // A question the session waits on (its transcript says so), else one a sub-session of it waits on: a T3
+        // session's is shown with its choices (Bloom's `question`) while it lasts, and answered in the row to type in,
+        // the answer going to the session asking.
+        bool own = s->canSay && next.phase == rc::Phase::Ask && next.asking && !next.askingPlan;
+        std::string asker = own ? id : s->canSay ? sn.subAsker : std::string();
+        bool question = !asker.empty();
+        auto a = asks_.find(id);
+        if (a != asks_.end() && a->second.inRow && (!question || (a->second.from.empty() ? id : a->second.from) != asker)) {
+            asks_.erase(a);
+            a = asks_.end();
+        }
+        // Bloom's request under the session's own id: a subagent's, when the tool asking runs only in subagents.
+        if (a != asks_.end() && !a->second.inRow && !a->second.sourced)
+            if (auto who = rc::SubagentAsking(views[id]->map, a->second.tool, ko)) {
+                a->second.sub = *who;
+                a->second.sourced = true;
+            }
+        const rc::Ask* ask = a != asks_.end() ? &a->second : nullptr;
+        if (ask) next.phase = rc::Phase::Approve;
+        // Stop: Bloom sends Esc into the console of a terminal session, and has T3 Code interrupt a T3 session's turn
+        // (Bloom's `can` says so); others (the SDK, an editor's panel) read no console, and nothing outside them can
+        // stop a turn.
+        const Status* st = StatusOf(id);
+        next.stoppable = link_.Up() && ((st && st->cli && st->alive) || s->canStop);
+        next.stopping = s->stopAt && tick - s->stopAt < kStopWaitMs;
+        // 보내기: Bloom is asked whether the session takes words once a connection and turn, and again a few times
+        // shortly after the card came while it said no (kCanAgainMs). A question it waits on opens the row to type the
+        // answer in, once a question, without taking the keys from anything.
+        if (s->canTurn != next.turnStart) {
+            s->canTurn = next.turnStart;
+            s->canAsked = false;
+        }
+        if (s->canAsked && !s->canSay && s->canAgain < int(std::size(kCanAgainMs)) &&
+            tick - s->madeAt >= kCanAgainMs[s->canAgain]) {
+            s->canAgain++;
+            s->canAsked = false;
+        }
+        if (link_.Up() && !s->canAsked) s->canAsked = link_.Send("{\"t\":\"can\",\"session\":" + rc::JsonString(id) + "}");
+        bool inRow = question && (!ask || ask->inRow);
+        if (inRow && (!s->askOpened || s->askFor != asker)) {
+            s->askOpened = true;
+            s->askFor = asker;
+            s->composing = true;
+            link_.Send(rc::SessionLine("question", asker));
+        } else if (!inRow && s->askOpened) {
+            s->askOpened = false;
+            s->askFor.clear();
+            if (editFor_ != s->id && Blank(s->draft)) s->composing = false;
+        }
+        next.subAsk = s->askOpened && s->askFor != id ? sn.subWho : std::wstring();
+        SayState(*s, next, tick);
+        Changes(*s, next, ask, tick);
+        s->card = std::move(next);
+        s->ask = ask ? std::optional<rc::Ask>(*ask) : std::nullopt;
+        s->wantOpen = WantsOpen(*s);
     }
     slots_.erase(std::remove_if(slots_.begin(), slots_.end(), [&](const std::unique_ptr<Slot>& s) {
                      return s->gone && !s->root;
@@ -999,16 +1431,22 @@ void App::Update() {
 std::string App::KeyOf(const Slot& s, rc::View view) const {
     const rc::Card& c = s.card;
     std::string k = std::to_string(int(view)) + "|" + std::to_string(int(c.phase)) + "|" + std::to_string(lookId_) + "|" +
-                    std::to_string(scale_) + "|" + std::to_string(c.filesChanged) + "|" + std::to_string(c.asking) + "|" +
+                    std::to_string(scale_) + std::to_string(int(PillW())) + "|" + std::to_string(c.filesChanged) + "|" + std::to_string(c.asking) + std::to_string(c.stoppable) +
+                    std::to_string(c.stopping) + "|" +
                     Narrow(c.model) + "|" + std::to_string(int(s.ptr.hover)) + "," + std::to_string(s.ptr.q) + "," +
                     std::to_string(s.ptr.choice);
-    for (const rc::Step& st : c.steps) k += "|" + Narrow(st.done) + (st.endedAt ? std::to_string(*st.endedAt) : "r");
-    // A clock that moves (the turn runs) is part of the picture.
-    if (!c.turnEnd) k += "|t" + std::to_string(int64_t(Now() / 1000));
-    else k += "|e" + std::to_string(*c.turnEnd);
+    k += "|say" + std::to_string(c.canSay) + std::to_string(c.composing) + std::to_string(c.focused) + std::to_string(c.typed) +
+         std::to_string(c.noteBad) + Narrow(c.draft) + "|" + Narrow(c.note);
+    for (const rc::Step& st : c.steps)
+        k += "|" + Narrow(st.done) + (st.endedAt ? std::to_string(*st.endedAt) : "r") + (st.sub ? "s" + std::to_string(st.subNo) : "");
+    k += "|kids" + std::to_string(c.kidsRunning) + "," + std::to_string(c.agentsRunning) + std::to_string(cfg_.subtasks) +
+         Narrow(c.subAsk);
+    // A clock that moves (the turn runs, or its subs work on) is part of the picture.
+    if (!c.turnEnd || rc::SubsAtWork(c) > 0) k += "|t" + std::to_string(int64_t(Now() / 1000));
+    else k += "|e" + std::to_string(std::max(*c.turnEnd, c.subsEnd));
     auto a = asks_.find(s.id);
     if (a != asks_.end()) {
-        k += "|ask" + a->second.id;
+        k += "|ask" + a->second.id + Narrow(a->second.sub) + "|p" + std::to_string(a->second.page);
         for (auto& p : a->second.picks)
             for (int i : p) k += "," + std::to_string(i);
     }
@@ -1016,7 +1454,7 @@ std::string App::KeyOf(const Slot& s, rc::View view) const {
 }
 
 void App::Layout() {
-    double now = Now();
+    double now = Now(), tick = Tick();
     std::vector<Slot*> list;
     for (auto& s : slots_)
         if (!s->gone) list.push_back(s.get());
@@ -1037,19 +1475,31 @@ void App::Layout() {
     };
     std::vector<rc::Size> sizes;
     for (Slot* s : list) sizes.push_back(sizeOf(s));
-    // Too tall for the monitor: fold open cards (not one being pointed at or asking), oldest first.
+    // Clear of what lies along the monitor's edges (Session Island, PillTaskbar's islands, a taskbar slid out).
+    if (edgesStale_) {
+        edges_ = EdgesNow();
+        edgesStale_ = false;
+    }
+    // A stack, or a row at a top or bottom place.
+    bool across = rc::Across(cfg_.anchor, cfg_.row);
+    auto lay = [&](rc::Box a) {
+        return across ? rc::Row(sizes, cfg_.anchor, a, Margin(), kGap) : rc::Stack(sizes, cfg_.anchor, a, Margin(), kGap);
+    };
+    room_ = rc::Clear(lay, area_, mon_, Margin(), kGap, edges_);
+    // Too tall for the monitor (a row: too wide): fold open cards (not one being pointed at or asking), oldest first.
     auto total = [&] {
         float t = 0;
-        for (auto& z : sizes) t += z.h + kGap;
+        for (auto& z : sizes) t += (across ? z.w : z.h) + kGap;
         return t - kGap;
     };
-    for (size_t i = 0; i < list.size() && total() > rc::Room(area_, cfg_.margin); i++) {
+    float room = across ? rc::RoomAcross(room_, Margin()) : rc::Room(room_, Margin());
+    for (size_t i = 0; i < list.size() && total() > room; i++) {
         Slot* s = list[i];
         if (!s->wantOpen || s->hover || s->card.phase == rc::Phase::Approve) continue;
         s->wantOpen = false;
         sizes[i] = sizeOf(s);
     }
-    std::vector<rc::Box> boxes = rc::Stack(sizes, cfg_.anchor, area_, cfg_.margin, kGap);
+    std::vector<rc::Box> boxes = lay(room_);
     bool moved = false;
     for (size_t i = 0; i < list.size(); i++) {
         Slot& s = *list[i];
@@ -1059,37 +1509,58 @@ void App::Layout() {
             morphing = s.placed;
             rc::Size from{s.box.w, s.box.h}, to{b.w, b.h};
             if (s.wantOpen) {
-                // Opens: the card drawn now, shown from the pill's size out.
+                // Opens: the card drawn now, shown from the pill's size out, its body coming out of a blur.
                 s.open = true;
                 s.foldAt = 0;
+                if (s.placed) {
+                    s.openAt = tick;
+                    s.foldStart = 0;
+                    s.pillW = from.w;
+                    s.animating = true;
+                }
                 Draw(s, rc::View::Card);
-                if (s.placed) AnimateClip(s, from, rc::kPillH / 2, to, rc::kRadius);
+                if (s.placed) AnimateClip(s, from, rc::kPillH / 2, to, rc::kRadius, rc::kOpenMs, rc::kEase);
             } else {
-                // Folds: the card stays drawn while its clip closes to the pill, then the pill is drawn.
+                // Folds: the card stays drawn while its clip closes to the pill (its body going back into the
+                // blur), then the pill is drawn.
                 s.open = false;
                 if (s.placed) {
-                    AnimateClip(s, from, rc::kRadius, to, rc::kPillH / 2);
-                    s.foldAt = now + kMorphMs;
-                    SetTimer(hwnd_, kMorphTimer, kMorphMs + 20, nullptr);
+                    AnimateClip(s, from, rc::kRadius, to, rc::kPillH / 2, rc::kFoldMs, rc::kEase);
+                    s.foldAt = tick + kFoldMs;
+                    s.foldStart = tick;
+                    s.pillW = to.w;
+                    s.animating = true;
+                    SetTimer(hwnd_, kMorphTimer, kFoldMs + 20, nullptr);
                 } else {
                     Draw(s, rc::View::Pill);
                 }
             }
         }
-        rc::View view = s.open ? rc::View::Card : s.foldAt > now ? rc::View::Card : rc::View::Pill;
-        if (KeyOf(s, view) != s.key) Draw(s, view);
-        // A card at rest is shown whole by its clip (a card that grew or shrank in place, a pill whose text changed
-        // while it folded).
-        if (s.placed && !morphing && (s.open || s.foldAt <= now) && (b.w != s.clipTo.w || b.h != s.clipTo.h)) {
-            float r = (s.open ? rc::kRadius : rc::kPillH / 2) * scale_;
-            s.clip.StopAnimation(L"Size");
-            s.clip.StopAnimation(L"CornerRadius");
-            s.clip.Size({b.w * scale_, b.h * scale_});
-            s.clip.CornerRadius({r, r});
-            s.clipTo = {b.w, b.h};
+        rc::View view = s.open ? rc::View::Card : s.foldAt > tick ? rc::View::Card : rc::View::Pill;
+        // A card at rest that grew or shrank in place (a step came in, a request, a pill's words) goes to its new
+        // size with its clip, and a pill's picture with it; one never shown whole yet is shown whole at once.
+        bool resized = s.placed && !morphing && (s.open || s.foldAt <= tick) && (b.w != s.clipTo.w || b.h != s.clipTo.h);
+        if (resized) {
+            float r = s.open ? rc::kRadius : rc::kPillH / 2;
+            if (s.clipTo.w > 0 && !hidden_) {
+                if (!s.open) {
+                    s.wasW = s.clipTo.w;
+                    s.sizeAt = tick;
+                    s.animating = true;
+                }
+                AnimateClip(s, s.clipTo, r, {b.w, b.h}, r, rc::kRowsMs, rc::kEase);
+            } else {
+                s.clip.StopAnimation(L"Size");
+                s.clip.StopAnimation(L"CornerRadius");
+                s.clip.Size({b.w * scale_, b.h * scale_});
+                s.clip.CornerRadius({r * scale_, r * scale_});
+                s.clipTo = {b.w, b.h};
+            }
         }
+        if (resized || KeyOf(s, view) != s.key) Draw(s, view);
         bool newPlace = !s.placed || s.box.x != b.x || s.box.y != b.y || s.box.w != b.w || s.box.h != b.h;
         moved = moved || newPlace;
+        s.from = s.placed && newPlace ? s.box : b;
         s.box = b;
         wfn::float3 at{std::round(b.x * scale_), std::round(b.y * scale_), 0};
         if (!s.placed) {
@@ -1113,6 +1584,7 @@ void App::Layout() {
     }
     if (moved) SetRegion(true);
     ArmFrames();
+    PlaceEdit();
 }
 
 void App::MakeVisuals(Slot& s) {
@@ -1122,6 +1594,12 @@ void App::MakeVisuals(Slot& s) {
     s.root.Clip(comp_.CreateGeometricClip(s.clip));
     s.surf = graphics_.CreateDrawingSurface({1, 1}, wgd::DirectXPixelFormat::B8G8R8A8UIntNormalized,
                                             wgd::DirectXAlphaMode::Premultiplied);
+    if (backdrop_) {
+        s.glass = comp_.CreateSpriteVisual();
+        s.glass.Brush(GlassBrush());
+        s.glass.IsVisible(glass_);
+        s.root.Children().InsertAtBottom(s.glass);
+    }
     s.sprite = comp_.CreateSpriteVisual();
     auto brush = comp_.CreateSurfaceBrush(s.surf);
     brush.Stretch(wuc::CompositionStretch::None);
@@ -1129,6 +1607,26 @@ void App::MakeVisuals(Slot& s) {
     brush.VerticalAlignmentRatio(0);
     s.sprite.Brush(brush);
     s.root.Children().InsertAtTop(s.sprite);
+    // The light over a working headline (Shine): its words through a band whose stops are those of the design.
+    s.shineSurf = graphics_.CreateDrawingSurface({1, 1}, wgd::DirectXPixelFormat::B8G8R8A8UIntNormalized,
+                                                 wgd::DirectXAlphaMode::Premultiplied);
+    s.shineWords = comp_.CreateSurfaceBrush(s.shineSurf);
+    s.shineWords.Stretch(wuc::CompositionStretch::None);
+    s.shineWords.HorizontalAlignmentRatio(0);
+    s.shineWords.VerticalAlignmentRatio(0);
+    s.band = comp_.CreateLinearGradientBrush();
+    s.band.MappingMode(wuc::CompositionMappingMode::Absolute);
+    s.band.StartPoint({0, 0});
+    s.band.EndPoint({1, 0});
+    for (auto [at, alpha] : {std::pair{0.0f, 0}, std::pair{0.357f, 255}, std::pair{0.643f, 255}, std::pair{1.0f, 0}})
+        s.band.ColorStops().Append(comp_.CreateColorGradientStop(at, {uint8_t(alpha), 255, 255, 255}));
+    auto masked = comp_.CreateMaskBrush();
+    masked.Source(s.shineWords);
+    masked.Mask(s.band);
+    s.shine = comp_.CreateSpriteVisual();
+    s.shine.Brush(masked);
+    s.shine.IsVisible(false);
+    s.root.Children().InsertAtTop(s.shine);
     s.ring = comp_.CreateShapeVisual();
     s.ringGeom = comp_.CreateEllipseGeometry();
     s.ringGeom.TrimEnd(0.28f);
@@ -1144,11 +1642,13 @@ void App::MakeVisuals(Slot& s) {
 }
 
 void App::Draw(Slot& s, rc::View view) {
-    double now = Now();
+    double now = Now(), tick = Tick();
     auto a = asks_.find(s.id);
     const rc::Ask* ask = a != asks_.end() ? &a->second : nullptr;
     rc::Laid L = painter_->Run(nullptr, s.card, ask, view, look_, rc::Ms(now), s.ptr, g_korean);
-    int w = std::max(1, int(std::ceil(L.w * scale_))), h = std::max(1, int(std::ceil(L.h * scale_)));
+    // A pill narrowing is drawn wider than it ends while it goes there.
+    float lw = view == rc::View::Pill && tick < s.sizeAt + rc::kRowsMs ? std::max(L.w, s.wasW) : L.w;
+    int w = std::max(1, int(std::ceil(lw * scale_))), h = std::max(1, int(std::ceil(L.h * scale_)));
     auto size = s.surf.SizeInt32();
     if (size.Width != w || size.Height != h) s.surf.Resize({w, h});
     auto sdi = s.surf.as<interop::ICompositionDrawingSurfaceInterop>();
@@ -1165,7 +1665,8 @@ void App::Draw(Slot& s, rc::View view) {
     dc->Clear(&clear);
     dc->SetTransform(D2D1::Matrix3x2F::Scale(scale_, scale_) * D2D1::Matrix3x2F::Translation(float(offset.x), float(offset.y)));
     try {
-        s.laid = painter_->Run(dc.get(), s.card, ask, view, look_, rc::Ms(now), s.ptr, g_korean);
+        rc::Motion m = MotionOf(s, tick);
+        s.laid = painter_->Run(dc.get(), s.card, ask, view, look_, rc::Ms(now), s.ptr, g_korean, false, &m);
     } catch (...) {
         Wh_Log(L"paint failed");
     }
@@ -1174,12 +1675,14 @@ void App::Draw(Slot& s, rc::View view) {
     s.drawn = view;
     s.key = KeyOf(s, view);
     s.sprite.Size({float(w), float(h)});
+    if (s.glass) s.glass.Size({float(w), float(h)});  // the clip gives it the card's shape
     s.ring.Size({float(w), float(h)});
     s.ringGeom.Center({s.laid.markAt.x * scale_, s.laid.markAt.y * scale_});
     s.ringGeom.Radius({rc::kRingR * scale_, rc::kRingR * scale_});
     s.ring.CenterPoint({s.laid.markAt.x * scale_, s.laid.markAt.y * scale_, 0});
     s.ringBrush.Color(WinColor(look_.text));
     s.ring.Shapes().GetAt(0).as<wuc::CompositionSpriteShape>().StrokeThickness(rc::kRingW * scale_);
+    Shine(s);
 }
 
 void App::Spin(Slot& s, bool on) {
@@ -1188,26 +1691,205 @@ void App::Spin(Slot& s, bool on) {
     s.ring.IsVisible(on);
 }
 
-void App::AnimateClip(Slot& s, rc::Size from, float fromR, rc::Size to, float toR) {
-    auto ease = comp_.CreateCubicBezierEasingFunction({kEase[0], kEase[1]}, {kEase[2], kEase[3]});
+// The light over a working headline (rc::Laid::shine, drawn in its resting tone): its words drawn bright in a surface
+// of their own, shown through a band that sweeps across them. Composition sweeps it; nothing is drawn meanwhile, and
+// the sweep stops whenever the light is not shown.
+void App::Shine(Slot& s) {
+    bool on = s.shine && s.laid.shine && !hidden_ && !s.gone;
+    if (!on) {
+        if (s.shining) {
+            s.shine.IsVisible(false);
+            s.band.StopAnimation(L"Offset");
+            s.shining = false;
+        }
+        return;
+    }
+    const D2D1_RECT_F& r = s.laid.title;
+    float x = r.left * scale_, y = r.top * scale_, fx = std::floor(x), fy = std::floor(y);
+    float ww = r.right - r.left, hh = r.bottom - r.top;
+    int w = std::max(1, int(std::ceil(ww * scale_ + x - fx))), h = std::max(1, int(std::ceil(hh * scale_ + y - fy)));
+    std::string key = Narrow(s.laid.titleText) + "|" + std::to_string(w) + "x" + std::to_string(h) + "|" +
+                      std::to_string(x) + "," + std::to_string(y) + "|" + std::to_string(lookId_);
+    if (key == s.shineKey && s.shining) return;
+    if (key != s.shineKey) {
+        auto size = s.shineSurf.SizeInt32();
+        if (size.Width != w || size.Height != h) s.shineSurf.Resize({w, h});
+        auto sdi = s.shineSurf.as<interop::ICompositionDrawingSurfaceInterop>();
+        com_ptr<ID2D1DeviceContext> dc;
+        POINT offset{};
+        HRESULT hr = sdi->BeginDraw(nullptr, __uuidof(ID2D1DeviceContext), dc.put_void(), &offset);
+        if (FAILED(hr)) {
+            if (DeviceLost(hr)) Recover();
+            return;
+        }
+        dc->SetDpi(96, 96);
+        D2D1_COLOR_F clear{};
+        dc->SetTransform(D2D1::Matrix3x2F::Translation(float(offset.x), float(offset.y)));
+        dc->Clear(&clear);
+        // The words where the card's picture has them: at the same fraction of a pixel.
+        dc->SetTransform(D2D1::Matrix3x2F::Scale(scale_, scale_) *
+                         D2D1::Matrix3x2F::Translation(float(offset.x) + x - fx, float(offset.y) + y - fy));
+        try {
+            painter_->Words(dc.get(), look_, s.laid.titleText, ww, hh, look_.text);
+        } catch (...) {
+            Wh_Log(L"shine failed");
+        }
+        hr = sdi->EndDraw();
+        if (DeviceLost(hr)) {
+            Recover();
+            return;
+        }
+        s.shineKey = key;
+        s.shine.Size({float(w), float(h)});
+        s.shine.Offset({fx, fy, 0});
+    }
+    // The band, 0.8 of the words wide, crosses them in three quarters of a sweep and is away for the rest.
+    float band = std::max(48.0f, 0.8f * float(w));
+    s.band.EndPoint({band, 0});
+    auto linear = comp_.CreateLinearEasingFunction();
+    auto sweep = comp_.CreateVector2KeyFrameAnimation();
+    sweep.InsertKeyFrame(0, {-band, 0}, linear);
+    sweep.InsertKeyFrame(0.75f, {float(w), 0}, linear);
+    sweep.InsertKeyFrame(1, {float(w), 0}, linear);
+    sweep.Duration(std::chrono::milliseconds(int64_t(rc::kShineMs)));
+    sweep.IterationBehavior(wuc::AnimationIterationBehavior::Forever);
+    s.band.StartAnimation(L"Offset", sweep);
+    s.shine.IsVisible(true);
+    s.shining = true;
+}
+
+// What a new state of a card starts moving (rc::Motion), each change from the card as it was until now. A running
+// step whose words only count on ("Reading 3 files", 4 files) changes its headline in place.
+void App::Changes(Slot& s, const rc::Card& next, const rc::Ask* ask, double now) {
+    int intent = std::exchange(s.sayIntent, 0);
+    if (!s.placed || s.gone) return;
+    const rc::Card& was = s.card;
+    const rc::Ask* wasAsk = s.ask ? &*s.ask : nullptr;
+    bool moved = false;
+    bool sameStep = next.steps.size() == was.steps.size() && next.phase == was.phase && next.asking == was.asking &&
+                    (ask != nullptr) == (wasAsk != nullptr);
+    if (!sameStep && painter_->TitleOf(was, wasAsk, g_korean) != painter_->TitleOf(next, ask, g_korean)) {
+        s.titleWas = was;
+        s.titleAsk = s.ask;
+        s.titleAt = now;
+        moved = true;
+    }
+    auto over = [](const rc::Card& c) { return c.phase == rc::Phase::Done || c.phase == rc::Phase::Stopped; };
+    if (next.steps.size() >= was.steps.size() && (next.steps.size() > was.steps.size() ||
+                                                  (rc::Current(was) && !rc::Current(next)) || over(next) != over(was))) {
+        s.rowsWas = was;
+        s.rowsAt = now;
+        moved = true;
+    }
+    // 보내기 opening the row to type in, or the row closed unsent going back into it: the button's own change (none
+    // with Windows' animation effects off); any other change of the buttons (a send, a question opening the row) the
+    // buttons' cross-blur.
+    int wasButtons = rc::Painter::ButtonsOf(was, wasAsk), nextButtons = rc::Painter::ButtonsOf(next, ask);
+    constexpr int kTyping = 4, kReply = 8;  // ButtonsOf: the row to type in; 보내기 among the buttons
+    bool sayOpens = intent > 0 && (wasButtons & kReply) && nextButtons == kTyping;
+    bool sayFolds = intent < 0 && wasButtons == kTyping && (nextButtons & kReply);
+    if (sayOpens || sayFolds) {
+        s.buttonsAt = 0;
+        if (Animations()) {
+            // Turned back halfway: from where the shape is, the fades going on from where they are (rc::SayTurn).
+            double from = 0;
+            float turn = -1;
+            rc::SayFade turnWas;
+            if (s.sayAt > 0 && s.sayBack != sayFolds && now < s.sayAt + (s.sayBack ? rc::kSayFoldMs : rc::kSayOpenMs)) {
+                float k = float((now - s.sayAt) / (s.sayBack ? rc::kSayFoldMs : rc::kSayOpenMs));
+                rc::SayTurned t = rc::SayTurn(s.sayBack, k, s.sayTurn, s.sayTurnWas);
+                turn = t.k;
+                turnWas = t.was;
+                from = t.k * (sayFolds ? rc::kSayFoldMs : rc::kSayOpenMs);
+            }
+            s.sayTurn = turn;
+            s.sayTurnWas = turnWas;
+            s.sayWas = was;
+            s.sayBack = sayFolds;
+            s.sayAt = now - from;
+            moved = true;
+        } else {
+            s.sayAt = 0;
+        }
+    } else if (wasButtons != nextButtons) {
+        s.sayAt = 0;
+        s.buttonsWas = was;
+        s.buttonsAsk = s.ask;
+        s.buttonsAt = now;
+        moved = true;
+    }
+    if (!rc::Painter::Dotted(was, wasAsk) && rc::Painter::Dotted(next, ask)) {
+        s.dotAt = now;
+        moved = true;
+    }
+    if (was.phase != rc::Phase::Done && next.phase == rc::Phase::Done) {
+        s.checkAt = now;
+        moved = true;
+    }
+    if (moved) s.animating = true;
+}
+
+rc::Motion App::MotionOf(const Slot& s, double now) const {
+    auto k = [&](double at, double ms) { return at > 0 ? float(std::clamp((now - at) / ms, 0.0, 1.0)) : 1.0f; };
+    rc::Motion m;
+    m.open = s.foldStart > s.openAt ? 1 - rc::Bezier(rc::kEase, k(s.foldStart, rc::kFoldMs))
+                                    : rc::Bezier(rc::kEase, k(s.openAt, rc::kOpenMs));
+    m.title = k(s.titleAt, rc::kTitleMs);
+    m.titleWas = &s.titleWas;
+    m.titleAsk = s.titleAsk ? &*s.titleAsk : nullptr;
+    m.rows = k(s.rowsAt, rc::kRowsMs);
+    m.rowsWas = &s.rowsWas;
+    m.buttons = k(s.buttonsAt, rc::kButtonsMs);
+    m.buttonsWas = &s.buttonsWas;
+    m.buttonsAsk = s.buttonsAsk ? &*s.buttonsAsk : nullptr;
+    m.say = k(s.sayAt, s.sayBack ? rc::kSayFoldMs : rc::kSayOpenMs);
+    m.sayBack = s.sayBack;
+    m.sayWas = &s.sayWas;
+    m.sayTurn = s.sayTurn;
+    m.sayTurnWas = s.sayTurnWas;
+    m.dot = k(s.dotAt, rc::kDotMs);
+    m.check = k(s.checkAt, rc::kCheckMs);
+    m.size = k(s.sizeAt, rc::kRowsMs);
+    m.wasW = s.wasW;
+    m.pillW = s.pillW;
+    m.shine = true;
+    return m;
+}
+
+bool App::Moving(const Slot& s, double now) const {
+    return now < std::max({s.openAt + rc::kOpenMs, s.foldStart + rc::kFoldMs, s.titleAt + rc::kTitleMs,
+                           s.rowsAt + rc::kRowsMs, s.buttonsAt + rc::kButtonsMs, s.dotAt + rc::kDotMs,
+                           s.checkAt + rc::kCheckMs, s.sizeAt + rc::kRowsMs, SayEnd(s)});
+}
+
+// When 보내기's own change ends (0: none began).
+double App::SayEnd(const Slot& s) const {
+    return s.sayAt > 0 ? s.sayAt + (s.sayBack ? rc::kSayFoldMs : rc::kSayOpenMs) : 0;
+}
+
+void App::AnimateClip(Slot& s, rc::Size from, float fromR, rc::Size to, float toR, double ms, const float (&e)[4]) {
+    auto ease = comp_.CreateCubicBezierEasingFunction({e[0], e[1]}, {e[2], e[3]});
     auto size = comp_.CreateVector2KeyFrameAnimation();
     size.InsertKeyFrame(0, {from.w * scale_, from.h * scale_});
     size.InsertKeyFrame(1, {to.w * scale_, to.h * scale_}, ease);
-    size.Duration(std::chrono::milliseconds(kMorphMs));
+    size.Duration(std::chrono::milliseconds(int64_t(ms)));
     s.clip.StartAnimation(L"Size", size);
     s.clipTo = to;
     auto radius = comp_.CreateVector2KeyFrameAnimation();
     radius.InsertKeyFrame(0, {fromR * scale_, fromR * scale_});
     radius.InsertKeyFrame(1, {toR * scale_, toR * scale_}, ease);
-    radius.Duration(std::chrono::milliseconds(kMorphMs));
+    radius.Duration(std::chrono::milliseconds(int64_t(ms)));
     s.clip.StartAnimation(L"CornerRadius", radius);
 }
 
 void App::FadeOut(Slot& s) {
     if (s.gone) return;
+    if (editFor_ == s.id) Detach(false);
     s.gone = true;
     s.hover = false;
+    s.animating = false;
     Spin(s, false);
+    if (s.shine) Shine(s);
     if (!s.root) return;
     auto out = comp_.CreateScalarKeyFrameAnimation();
     out.InsertKeyFrame(1, 0);
@@ -1234,7 +1916,12 @@ void App::SetRegion(bool moving) {
     HRGN all = CreateRectRgn(0, 0, 0, 0);
     for (auto& s : slots_) {
         if (s->gone || !s->placed) continue;
-        const rc::Box& b = s->box;
+        rc::Box b = s->box;
+        if (moving) {
+            // A card gliding to its new place shows on the whole way there, not only where it left and lands.
+            float x = std::min(b.x, s->from.x), y = std::min(b.y, s->from.y);
+            b = {x, y, std::max(b.Right(), s->from.Right()) - x, std::max(b.Bottom(), s->from.Bottom()) - y};
+        }
         int l = int(std::floor(b.x * scale_)), t = int(std::floor(b.y * scale_));
         int r = int(std::ceil(b.Right() * scale_)), btm = int(std::ceil(b.Bottom() * scale_));
         HRGN one;
@@ -1260,10 +1947,10 @@ void App::SetRegion(bool moving) {
     SetWindowRgn(hwnd_, all, TRUE);
 }
 
-// The ring turns while a card works: a frame every 1/60 s.
+// The ring turns while a card works, and a card changing is drawn again: a frame every 1/60 s, none at rest.
 void App::ArmFrames() {
     bool any = false;
-    for (auto& s : slots_) any = any || s->spinning;
+    for (auto& s : slots_) any = any || s->spinning || s->animating;
     if (any == framing_) return;
     framing_ = any;
     if (any) {
@@ -1277,10 +1964,23 @@ void App::ArmFrames() {
 
 void App::OnFrame() {
     if (!framing_) return;
-    double now = Now();
+    double now = Tick();
     float angle = float(std::fmod(now / kRingTurnMs, 1.0) * 360.0);
-    for (auto& s : slots_)
+    bool any = false;
+    for (auto& s : slots_) {
         if (s->spinning) s->ring.RotationAngleInDegrees(angle);
+        if (s->animating && !s->gone) {
+            // Its last frame is the card at rest.
+            s->animating = Moving(*s, now);
+            Draw(*s, s->open || s->foldAt > now ? rc::View::Card : rc::View::Pill);
+        }
+        any = any || s->spinning || (s->animating && !s->gone);
+    }
+    if (!editFor_.empty()) PlaceEdit();  // 보내기's box arrived: its edit box over it (PlaceEdit)
+    if (!any) {
+        framing_ = false;
+        return;
+    }
     // The next frame on the next 1/60 s boundary, so the turning keeps one beat.
     double next = kFrameMs - std::fmod(now, kFrameMs);
     LARGE_INTEGER due{};
@@ -1302,6 +2002,10 @@ void App::Recover() {
                                                      wgd::DirectXAlphaMode::Premultiplied);
             s->sprite.Brush().as<wuc::CompositionSurfaceBrush>().Surface(s->surf);
             s->key.clear();
+            s->shineSurf = graphics_.CreateDrawingSurface({1, 1}, wgd::DirectXPixelFormat::B8G8R8A8UIntNormalized,
+                                                          wgd::DirectXAlphaMode::Premultiplied);
+            s->shineWords.Surface(s->shineSurf);
+            s->shineKey.clear();
         }
     } catch (...) {
         Wh_Log(L"recover failed");
@@ -1319,6 +2023,7 @@ void App::OnSnapshot(size_t folder, std::shared_ptr<const si::Snapshot> s) {
 void App::OnSettings() {
     Config old = cfg_;
     cfg_ = ReadConfig();
+    painter_->SamePill(PillW());
     if (old.approvals != cfg_.approvals)
         link_.Send(std::string("{\"t\":\"prefs\",\"approvals\":") + (cfg_.approvals ? "true" : "false") + "}");
     ReadLook(true);
@@ -1332,10 +2037,21 @@ void App::OnLink(WPARAM what, std::string* line) {
     std::unique_ptr<std::string> own(line);
     if (what == rc::Link::kUp) {
         link_.Send(std::string("{\"t\":\"hello\",\"v\":1,\"approvals\":") + (cfg_.approvals ? "true" : "false") + "}");
+        for (auto& s : slots_) s->canAsked = false;  // asked again of this Bloom (Update)
+        kinAsked_.clear();
+        kinHeard_ = false;
+        Update();  // Stop needs Bloom
         return;
     }
     if (what == rc::Link::kDown) {
         asks_.clear();
+        kin_.clear();  // no Bloom, nothing known of T3 Code: each session shows its own card
+        kinAsked_.clear();
+        kinHeard_ = false;
+        for (auto& s : slots_) {
+            s->canSay = s->canStop = s->canAsked = false;
+            if (s->sending) Said(*s, false, L"bloom");
+        }
         Update();
         return;
     }
@@ -1344,38 +2060,92 @@ void App::OnLink(WPARAM what, std::string* line) {
     if (!wdj::JsonObject::TryParse(Widen(*line), o)) return;
     try {
         std::wstring t(o.GetNamedString(L"t", L""));
+        // AskUserQuestion's questions as Bloom passes them on (its requests, a T3 session's question).
+        auto questions = [&](rc::Ask& a) {
+            if (!o.HasKey(L"questions") || o.GetNamedValue(L"questions").ValueType() != wdj::JsonValueType::Array) return;
+            for (auto const& qv : o.GetNamedArray(L"questions")) {
+                auto q = qv.GetObject();
+                rc::Question question;
+                question.header = std::wstring(q.GetNamedString(L"header", L""));
+                question.text = std::wstring(q.GetNamedString(L"text", L""));
+                question.multi = q.GetNamedBoolean(L"multi", false);
+                for (auto const& cv : q.GetNamedArray(L"choices")) {
+                    auto ch = cv.GetObject();
+                    question.choices.push_back(
+                        {std::wstring(ch.GetNamedString(L"label", L"")), std::wstring(ch.GetNamedString(L"description", L""))});
+                }
+                a.questions.push_back(std::move(question));
+            }
+            a.picks.resize(a.questions.size());
+        };
         if (t == L"ask") {
             rc::Ask a;
             a.id = winrt::to_string(o.GetNamedString(L"id", L""));
             std::string session = winrt::to_string(o.GetNamedString(L"session", L""));
             a.tool = std::wstring(o.GetNamedString(L"tool", L""));
             a.body = std::wstring(o.GetNamedString(L"body", L""));
-            if (o.HasKey(L"questions") && o.GetNamedValue(L"questions").ValueType() == wdj::JsonValueType::Array) {
-                for (auto const& qv : o.GetNamedArray(L"questions")) {
-                    auto q = qv.GetObject();
-                    rc::Question question;
-                    question.header = std::wstring(q.GetNamedString(L"header", L""));
-                    question.text = std::wstring(q.GetNamedString(L"text", L""));
-                    question.multi = q.GetNamedBoolean(L"multi", false);
-                    for (auto const& cv : q.GetNamedArray(L"choices")) {
-                        auto ch = cv.GetObject();
-                        question.choices.push_back(
-                            {std::wstring(ch.GetNamedString(L"label", L"")), std::wstring(ch.GetNamedString(L"description", L""))});
-                    }
-                    a.questions.push_back(std::move(question));
-                }
-                a.picks.resize(a.questions.size());
+            questions(a);
+            // A sub-session's goes on the card of the session it works for, saying whose it is; answered by its id.
+            std::string card = CardFor(session);
+            if (card != session) {
+                a.from = session;
+                a.sub = SubWho(session);
+                a.sourced = true;
             }
-            // Shown only whole (Fits; the card no taller than the room), and one at a time per session: a second one
+            // Shown only whole (Fits; the card no taller than the room), and one at a time per card: a second one
             // (parallel subagents ask under their session's id) goes to Bloom's card, which shows several at once.
-            Slot* s = Find(session);
-            bool show = cfg_.approvals && s && !hidden_ && !a.id.empty() && !asks_.count(session) &&
+            Slot* s = Find(card);
+            bool show = cfg_.approvals && s && !hidden_ && !a.id.empty() && !asks_.count(card) &&
                         painter_->Fits(a, g_korean) &&
-                        painter_->Run(nullptr, s->card, &a, rc::View::Card, look_, rc::Ms(Now()), {}, g_korean).h <=
-                            rc::Room(area_, cfg_.margin);
+                        painter_->AskH(s->card, a, look_, rc::Ms(Now()), g_korean) <= rc::Room(room_, Margin());
             link_.Send(std::string("{\"t\":\"") + (show ? "shown" : "none") + "\",\"id\":" + rc::JsonString(a.id) + "}");
             if (!show) return;
-            asks_[session] = std::move(a);
+            asks_[card] = std::move(a);
+            Update();
+        } else if (t == L"question") {
+            // A T3 session's question with its choices, when it still waits on it and the card shows it whole: on its
+            // own card, or a sub-session's on the card of the session it works for.
+            std::string session = winrt::to_string(o.GetNamedString(L"session", L""));
+            Slot* s = Find(CardFor(session));
+            if (!s || !s->askOpened || s->askFor != session || asks_.count(s->id)) return;
+            rc::Ask a;
+            a.id = "t3:" + session;
+            a.tool = L"AskUserQuestion";
+            a.inRow = true;
+            a.sourced = true;
+            if (session != s->id) {
+                a.from = session;
+                a.sub = SubWho(session);
+            }
+            questions(a);
+            if (a.questions.empty() || !painter_->Fits(a, g_korean) ||
+                painter_->AskH(s->card, a, look_, rc::Ms(Now()), g_korean) > rc::Room(room_, Margin()))
+                return;
+            asks_[s->id] = std::move(a);
+            Update();
+        } else if (t == L"kin") {
+            // A session's parent and sub-sessions (si::json reads it: rc::ParseKin, as the test program does).
+            auto k = rc::ParseKin(*line);
+            if (!k) return;
+            kinHeard_ = true;
+            std::string session = k->session;
+            kin_[session] = std::move(*k);
+            Update();
+        } else if (t == L"can" || t == L"said" || t == L"stopped") {
+            // A send's or a stop's answer may name the sub-session the card's row answered.
+            std::string session = winrt::to_string(o.GetNamedString(L"session", L""));
+            Slot* s = Find(session);
+            if (!s && t != L"can") s = Find(CardFor(session));
+            if (!s) return;
+            if (t == L"can") {
+                s->canSay = o.GetNamedBoolean(L"say", false);
+                s->canStop = o.GetNamedBoolean(L"stop", false);
+            } else if (t == L"stopped") {
+                if (!o.GetNamedBoolean(L"ok", false)) NotStopped(*s, std::wstring(o.GetNamedString(L"why", L"")));
+            } else if (s->sending) {
+                bool ok = o.GetNamedBoolean(L"ok", false);
+                Said(*s, ok, std::wstring(o.GetNamedString(ok ? L"how" : L"why", L"")));
+            }
             Update();
         } else if (t == L"cancel") {
             std::string id = winrt::to_string(o.GetNamedString(L"id", L""));
@@ -1449,6 +2219,23 @@ void App::OnMouse(UINT msg, LPARAM lParam) {
     }
     if (msg == WM_LBUTTONDOWN) {
         press_.reset();
+        // A click on the card away from the row typed in (its box, its send button) closes the row, as Esc does: the
+        // buttons come back, the words are kept for the next 보내기. A row opened for a question stays (OnEditBlur).
+        // (보내기 itself, there while its box is still growing out of it, keeps the row.)
+        if (s && s->composing && !s->askOpened && hit.act != rc::Act::Field && hit.act != rc::Act::Say &&
+            hit.act != rc::Act::Pick && hit.act != rc::Act::Page && hit.act != rc::Act::Reply) {
+            if (editFor_ == s->id) Detach(true);
+            s->composing = false;
+            s->sayIntent = -1;
+            SyncSay(*s);
+            return;
+        }
+        // 보내기 and the row's box take the keys as they are pressed, as a text box does: words typed straight after
+        // the click are the card's, not the window's before it (by the button's release they would have gone there).
+        if (s && (hit.act == rc::Act::Reply || hit.act == rc::Act::Field)) {
+            Act(*s, hit);
+            return;
+        }
         if (s && hit.act != rc::Act::None) press_ = {s->id, hit.act};
         return;
     }
@@ -1458,11 +2245,7 @@ void App::OnMouse(UINT msg, LPARAM lParam) {
         if (s && was && was->first == s->id && was->second == hit.act) Act(*s, hit);
         return;
     }
-    if (msg == WM_RBUTTONUP && s && (s->card.phase == rc::Phase::Done || s->card.phase == rc::Phase::Stopped)) {
-        if (s->card.turnEnd) dismissed_[s->id] = *s->card.turnEnd;
-        FadeOut(*s);
-        Layout();
-    }
+    if (msg == WM_RBUTTONUP && s && (s->card.phase == rc::Phase::Done || s->card.phase == rc::Phase::Stopped)) Dismiss(*s);
 }
 
 void App::OnLeave() {
@@ -1475,10 +2258,17 @@ void App::Act(Slot& s, const rc::Hit& hit) {
     switch (hit.act) {
         case rc::Act::Header:
         case rc::Act::Open:
-            if (a != asks_.end()) Answer(s, "\"value\":\"terminal\"");
+            if (a != asks_.end() && !a->second.inRow) Answer(s, "\"value\":\"terminal\"");
             else Open(s);
             break;
         case rc::Act::Allow: Answer(s, "\"value\":\"allow\""); break;
+        case rc::Act::Reply: Compose(s); break;
+        case rc::Act::Field: Attach(s); break;
+        case rc::Act::Say:
+            if (s.composing) SendSay(s);  // not the send button of a box folding back unsent
+            break;
+        case rc::Act::Stop: StopTurn(s); break;
+        case rc::Act::Close: Dismiss(s); break;
         case rc::Act::Deny: Answer(s, "\"value\":\"deny\""); break;
         case rc::Act::Pick:
             if (a != asks_.end() && hit.q >= 0 && hit.q < int(a->second.questions.size())) {
@@ -1488,8 +2278,21 @@ void App::Act(Slot& s, const rc::Hit& hit) {
                     if (at == picks.end()) picks.push_back(hit.choice);
                     else picks.erase(at);
                 } else {
+                    // One picked: a moment later the card turns to the next question not answered (PageTurn).
                     picks = {hit.choice};
+                    if (a->second.questions.size() > 1) {
+                        turn_ = {s.id, a->second.id, hit.q};
+                        SetTimer(hwnd_, kPageTimer, kPageMs, nullptr);
+                    }
                 }
+                Layout();
+            }
+            break;
+        case rc::Act::Page:
+            if (a != asks_.end() && hit.q >= 0 && hit.q < int(a->second.questions.size())) {
+                a->second.page = hit.q;
+                turn_.reset();
+                KillTimer(hwnd_, kPageTimer);
                 Layout();
             }
             break;
@@ -1509,9 +2312,23 @@ void App::Act(Slot& s, const rc::Hit& hit) {
     }
 }
 
+// A moment after a question was picked: the card turns to the next one not answered (after it, else before it), unless
+// another page was turned to meanwhile or the request is gone. With every one answered it stays, 보내기 lit.
+void App::PageTurn() {
+    auto turn = std::move(turn_);
+    turn_.reset();
+    if (!turn) return;
+    auto a = asks_.find(turn->card);
+    if (a == asks_.end() || a->second.id != turn->ask || a->second.page != turn->from) return;
+    int next = a->second.NextOpen(turn->from);
+    if (next < 0) return;
+    a->second.page = next;
+    Layout();
+}
+
 void App::Answer(Slot& s, const std::string& json) {
     auto a = asks_.find(s.id);
-    if (a == asks_.end()) return;
+    if (a == asks_.end() || a->second.inRow) return;
     // "In terminal": Bloom brings the session's window forward, with the right to that this click gave explorer.
     if (DWORD bloom = link_.BloomPid()) AllowSetForegroundWindow(bloom);
     link_.Send("{\"t\":\"answer\",\"id\":" + rc::JsonString(a->second.id) + "," + json + "}");
@@ -1530,6 +2347,326 @@ void App::Open(Slot& s) {
     if (s.pid && !TestMode()) RaiseSession(s.pid);
 }
 
+// Closed by hand (its X, or a right click on a finished card): gone for the rest of its turn. A request Bloom passed on
+// for it goes back to Bloom's own card (Update: a session not shown).
+void App::Dismiss(Slot& s) {
+    dismissed_[s.id] = s.card.turnStart;
+    FadeOut(s);
+    Update();
+}
+
+// Stop: Bloom checks the session is the terminal one it says and sends Esc into its console (Claude Code stops the
+// turn), or has T3 Code interrupt a T3 session's turn; the card ends with the turn, as for an Esc typed there.
+void App::StopTurn(Slot& s) {
+    if (!s.card.stoppable || s.card.stopping) return;
+    if (!link_.Send("{\"t\":\"stop\",\"session\":" + rc::JsonString(s.id) + ",\"pid\":" + std::to_string(s.pid) + "}")) return;
+    s.stopAt = Tick();
+    Update();
+}
+
+// Bloom could not stop it: Stop can be pressed again, and the row says so a while (where a send's result goes).
+void App::NotStopped(Slot& s, const std::wstring& why) {
+    bool ko = g_korean;
+    s.stopAt = 0;
+    s.noteAt = Tick();
+    s.noteBad = true;
+    s.note = why == L"t3-off" ? rc::Tr(ko, L"T3가 꺼져 있어 못 멈췄어요", L"T3 isn't running")
+                              : rc::Tr(ko, L"멈추지 못했어요", L"Couldn't stop");
+}
+
+// ---- 보내기 ---------------------------------------------------------------------------------------------------
+// A T3 session's card takes words for the session: its 보내기 turns the buttons' row into a box to type in, Enter
+// sends the words to Bloom, which puts them into the session's thread (the answer to a question it waits on, else
+// into the running turn, else a new one) and says what came of it. The cards' window takes no keys, so the typing is
+// done in an edit box of its own over the row.
+
+// A card stays open while it asks, is over, is pointed at, or is being typed into.
+bool App::WantsOpen(const Slot& s) const {
+    rc::Phase p = s.card.phase;
+    bool pinned = p == rc::Phase::Approve || p == rc::Phase::Ask || p == rc::Phase::Done || p == rc::Phase::Stopped;
+    return cfg_.always || s.hover || pinned || s.composing;
+}
+
+// The card's 보내기 parts from the slot, as Update lays out (and what came of a send, gone after a while).
+void App::SayState(Slot& s, rc::Card& c, double now) {
+    if (s.sending && now - s.noteAt > kSayWaitMs) Said(s, false, L"failed");
+    if (!s.sending && !s.note.empty() && now - s.noteAt > kNoteMs) s.note.clear();
+    bool can = s.canSay && link_.Up();
+    if (!can && s.composing) {
+        if (editFor_ == s.id) Detach(false);
+        s.composing = false;
+    }
+    c.canSay = can;
+    c.composing = s.composing;
+    c.focused = editFor_ == s.id;
+    c.draft = s.draft;
+    c.typed = !Blank(c.focused ? EditText() : s.draft);
+    c.note = s.note;
+    c.noteBad = s.noteBad;
+}
+
+// A change of the card's 보내기 parts drawn now (the buttons changing as Update's changes do).
+void App::SyncSay(Slot& s) {
+    double now = Tick();
+    rc::Card next = s.card;
+    SayState(s, next, now);
+    auto a = asks_.find(s.id);
+    Changes(s, next, a != asks_.end() ? &a->second : nullptr, now);
+    s.card = std::move(next);
+    s.wantOpen = WantsOpen(s);
+    Layout();
+}
+
+// 보내기 pressed: the row becomes the box, taking the keys.
+void App::Compose(Slot& s) {
+    s.composing = true;
+    s.sayIntent = 1;  // the button grows into the box (Changes)
+    SyncSay(s);
+    Attach(s);
+}
+
+// The edit box over `s`'s row, with its words, taking the keys (a click on the card gave explorer the right to).
+void App::Attach(Slot& s) {
+    if (hidden_ || s.gone || !s.composing) return;
+    if (!editFor_.empty() && editFor_ != s.id) Detach(false);
+    if (!edit_) {
+        edit_ = CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_TOPMOST, L"EDIT", L"", WS_POPUP | ES_AUTOHSCROLL | ES_LEFT, 0, 0, 1, 1,
+                                hwnd_, nullptr, ModuleInstance(), nullptr);
+        if (!edit_) {
+            Wh_Log(L"no edit box: %u", GetLastError());
+            return;
+        }
+        editProc_ = reinterpret_cast<WNDPROC>(SetWindowLongPtrW(edit_, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(EditProc)));
+        SendMessageW(edit_, EM_LIMITTEXT, kSayMax, 0);
+    }
+    if (editFor_ != s.id) {
+        editFor_ = s.id;
+        SetWindowTextW(edit_, s.draft.c_str());
+        SendMessageW(edit_, EM_SETSEL, s.draft.size(), s.draft.size());
+    }
+    SyncSay(s);  // drawn with the box focused; PlaceEdit shows the edit box over it
+    HWND fg = GetForegroundWindow();
+    if (fg != edit_) before_ = fg;
+    SetForegroundWindow(edit_);
+    SetFocus(edit_);
+}
+
+// The edit box goes: its words stay in its card's row (drawn there). `giveBack`: the keys go back to the window
+// that had them.
+void App::Detach(bool giveBack) {
+    if (editFor_.empty()) return;
+    if (Slot* s = Find(editFor_)) s->draft = EditText();
+    editFor_.clear();
+    if (giveBack && before_ && IsWindow(before_) && GetForegroundWindow() == edit_) SetForegroundWindow(before_);
+    before_ = nullptr;
+    if (edit_) ShowWindow(edit_, SW_HIDE);
+    editAt_ = {};
+}
+
+// The edit box over its card's words (after every layout: the cards move), in the cards' size of the words.
+void App::PlaceEdit() {
+    if (editFor_.empty() || !edit_) return;
+    Slot* s = Find(editFor_);
+    if (!s || s->gone || hidden_ || !s->open || !s->card.composing) {
+        Detach(false);
+        return;
+    }
+    if (editScale_ != scale_) {
+        if (editFont_) DeleteObject(editFont_);
+        editFont_ = CreateFontW(-std::lround(12.5f * scale_), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
+                                OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH, L"Segoe UI");
+        SendMessageW(edit_, WM_SETFONT, reinterpret_cast<WPARAM>(editFont_), TRUE);
+        SendMessageW(edit_, EM_SETMARGINS, EC_LEFTMARGIN | EC_RIGHTMARGIN, 0);
+        HDC dc = GetDC(edit_);
+        HGDIOBJ was = SelectObject(dc, editFont_);
+        TEXTMETRICW tm{};
+        GetTextMetricsW(dc, &tm);
+        SelectObject(dc, was);
+        ReleaseDC(edit_, dc);
+        editLineH_ = tm.tmHeight;
+        editScale_ = scale_;
+    }
+    const D2D1_RECT_F& f = s->laid.field;
+    int x = work_.left + int(std::lround((s->box.x + f.left) * scale_));
+    int top = work_.top + int(std::lround((s->box.y + f.top) * scale_));
+    int w = int(std::lround((f.right - f.left) * scale_)), fh = int(std::lround((f.bottom - f.top) * scale_));
+    int h = std::min(fh, editLineH_ + 2);
+    RECT at{x, top + (fh - h) / 2, x + w, top + (fh - h) / 2 + h};
+    // While 보내기's box grows the edit box has the keys but no size: no caret or words over a moving shape (OnFrame
+    // places it once the box has arrived).
+    if (!s->sayBack && Tick() < SayEnd(*s)) at = {x, top, x, top};
+    w = at.right - at.left;
+    h = at.bottom - at.top;
+    if (EqualRect(&at, &editAt_) && IsWindowVisible(edit_)) return;
+    bool grew = editAt_.right <= editAt_.left && w > 0;
+    editAt_ = at;
+    SetWindowPos(edit_, HWND_TOPMOST, at.left, at.top, w, h, SWP_NOACTIVATE | SWP_SHOWWINDOW);
+    if (grew) {
+        // Keys typed while it had no width scrolled its words out of sight: from their start again, the caret where
+        // it was.
+        DWORD from = 0, to = 0;
+        SendMessageW(edit_, EM_GETSEL, reinterpret_cast<WPARAM>(&from), reinterpret_cast<LPARAM>(&to));
+        SendMessageW(edit_, EM_SETSEL, 0, 0);
+        SendMessageW(edit_, EM_SCROLLCARET, 0, 0);
+        SendMessageW(edit_, EM_SETSEL, from, to);
+        SendMessageW(edit_, EM_SCROLLCARET, 0, 0);
+    }
+}
+
+std::wstring App::EditText() const {
+    if (!edit_) return {};
+    int n = GetWindowTextLengthW(edit_);
+    std::wstring t(size_t(n) + 1, L'\0');
+    t.resize(size_t(GetWindowTextW(edit_, t.data(), n + 1)));
+    return t;
+}
+
+// The words in `s`'s row to Bloom, with the choices picked for its T3 question; the row is the buttons again, saying
+// it is sending.
+void App::SendSay(Slot& s) {
+    if (editFor_ == s.id) Detach(true);
+    auto a = asks_.find(s.id);
+    const rc::Ask* q = a != asks_.end() && a->second.inRow ? &a->second : nullptr;
+    if ((Blank(s.draft) && !(q && q->Answered())) || s.sending) {
+        SyncSay(s);
+        return;
+    }
+    // The words go to the session the row answered when they were begun (a sub-session's question, on its parent's
+    // card, or the card's own), else to the one it answers now; words begun for a question that is over go nowhere
+    // (as Bloom's no-question: back in the box, saying so).
+    rc::SayTo to = rc::SayTarget(s.id, s.draftFor, s.draftAsk, Blank(s.draft), s.askOpened, s.askFor);
+    s.sent = s.draft;
+    s.sentFor = s.draftFor;
+    s.sentAsk = s.draftAsk;
+    s.draft.clear();
+    s.draftFor.clear();
+    s.draftAsk = false;
+    s.composing = false;
+    s.noteAt = Tick();
+    if (to.over) {
+        s.sentFor.clear();
+        Said(s, false, L"no-question");
+        SyncSay(s);
+        return;
+    }
+    // The choices picked go with words to the session whose question they are of.
+    std::optional<std::vector<std::vector<int>>> picks;
+    if (q && (q->from.empty() ? s.id : q->from) == to.session) {
+        picks = q->picks;
+        asks_.erase(a);  // its choices go with the send; a send that fails asks Bloom for them again (Said)
+    }
+    s.sending = true;
+    s.note = rc::Tr(g_korean, L"보내는 중…", L"Sending…");
+    s.noteBad = false;
+    if (!link_.Send(rc::SayLine(to.session, Narrow(s.sent), picks ? &*picks : nullptr))) Said(s, false, L"bloom");
+    SyncSay(s);
+}
+
+// What came of a send (Bloom's `said`: how it went, or why not); words that did not go are back in the box.
+void App::Said(Slot& s, bool ok, const std::wstring& word) {
+    bool ko = g_korean;
+    s.sending = false;
+    s.noteAt = Tick();
+    s.noteBad = !ok;
+    if (ok)
+        s.note = word == L"answered" ? rc::Tr(ko, L"질문에 답했어요", L"Answered")
+                 : word == L"steered" ? rc::Tr(ko, L"지금 턴에 넣었어요", L"Added to this turn")
+                 : word == L"started" ? rc::Tr(ko, L"보냈어요", L"Sent")
+                                      : rc::Tr(ko, L"다음 턴으로 보냈어요", L"Sent for the next turn");
+    else
+        s.note = word == L"t3-off"      ? rc::Tr(ko, L"T3가 꺼져 있어 못 보냈어요", L"T3 isn't running")
+                 : word == L"no-thread" ? rc::Tr(ko, L"T3에서 이 세션을 못 찾았어요", L"T3 has no thread for this session")
+                 : word == L"bloom"     ? rc::Tr(ko, L"Bloom에 닿지 않아 못 보냈어요", L"Bloom isn't connected")
+                 : word == L"no-question" ? rc::Tr(ko, L"질문이 이미 끝났어요", L"The question is over")
+                                        : rc::Tr(ko, L"보내지 못했어요", L"Couldn't send");
+    if (!ok && Blank(s.draft)) {
+        // Back in the box for the session they were for; for a question over, for whatever the row answers next.
+        s.draft = s.sent;
+        s.draftFor = word == L"no-question" ? std::string() : s.sentFor;
+        s.draftAsk = !s.draftFor.empty() && s.sentAsk;
+    }
+    s.sent.clear();
+    s.sentFor.clear();
+    // the question still waits: its choices again
+    if (!ok && s.askOpened && link_.Up()) link_.Send(rc::SessionLine("question", s.askFor.empty() ? s.id : s.askFor));
+}
+
+// Enter sends, Esc gives the row back to the buttons (the words kept for the next 보내기).
+void App::OnEditKey(WPARAM key) {
+    Slot* s = Find(editFor_);
+    if (!s) return;
+    if (key == VK_RETURN) {
+        SendSay(*s);
+        return;
+    }
+    Detach(true);
+    s->composing = false;
+    s->sayIntent = -1;
+    SyncSay(*s);
+}
+
+// The keys went elsewhere: the words stay drawn in the row; an empty row the person left goes back to the buttons
+// (one opened for a question stays).
+void App::OnEditBlur() {
+    if (editFor_.empty() || !edit_ || GetFocus() == edit_) return;
+    Slot* s = Find(editFor_);
+    Detach(false);
+    if (!s) return;
+    if (Blank(s->draft) && !s->askOpened) {
+        s->composing = false;
+        s->sayIntent = -1;
+    }
+    SyncSay(*s);
+}
+
+// Words came or went: the send button lights or dims. The first words take the session the row answers then as
+// theirs (SendSay sends them there, whatever asks by then); none left, none.
+void App::OnEditChange() {
+    Slot* s = Find(editFor_);
+    if (!s) return;
+    bool blank = Blank(EditText());
+    if (blank) {
+        s->draftFor.clear();
+        s->draftAsk = false;
+    } else if (s->draftFor.empty()) {
+        s->draftFor = rc::RowFor(s->id, s->askOpened, s->askFor);
+        s->draftAsk = s->askOpened;
+    }
+    if (s->card.typed != !blank) SyncSay(*s);
+}
+
+LRESULT App::EditColors(HDC dc) {
+    auto ref = [](uint32_t argb) { return RGB(BYTE(argb >> 16), BYTE(argb >> 8), BYTE(argb)); };
+    if (!editBrush_ || editBg_ != look_.btn) {
+        if (editBrush_) DeleteObject(editBrush_);
+        editBrush_ = CreateSolidBrush(ref(look_.btn));
+        editBg_ = look_.btn;
+    }
+    SetTextColor(dc, ref(look_.text));
+    SetBkColor(dc, ref(look_.btn));
+    return reinterpret_cast<LRESULT>(editBrush_);
+}
+
+LRESULT CALLBACK App::EditProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+    App* self = g_app;
+    if (!self || !self->editProc_) return DefWindowProcW(hwnd, msg, wParam, lParam);
+    switch (msg) {
+        case WM_KEYDOWN:
+            if (wParam == VK_RETURN || wParam == VK_ESCAPE) {
+                self->OnEditKey(wParam);
+                return 0;
+            }
+            break;
+        case WM_CHAR:
+            if (wParam == L'\r' || wParam == L'\n' || wParam == 0x1B) return 0;  // handled at the key, with no beep
+            break;
+        case WM_KILLFOCUS:
+            PostMessageW(self->hwnd_, kEditMsg, 0, 0);
+            break;
+    }
+    return CallWindowProcW(self->editProc_, hwnd, msg, wParam, lParam);
+}
+
 // ---- fullscreen ---------------------------------------------------------------------------------------------
 // A fullscreen app (a game, a video) on the cards' monitor keeps them away, as Session island does.
 
@@ -1543,6 +2680,97 @@ bool IsShellWindow(HWND window) {
     WCHAR name[64];
     return GetClassNameW(window, name, ARRAYSIZE(name)) &&
            (wcscmp(name, L"Progman") == 0 || wcscmp(name, L"WorkerW") == 0 || wcscmp(name, L"Shell_TrayWnd") == 0);
+}
+
+// ---- what lies along the monitor's edges -------------------------------------------------------------------------
+// The cards keep clear of it (rc::Clear) and follow it as it changes: Session Island opening and closing, a hidden
+// taskbar sliding out from PillTaskbar's island and back.
+
+// Their windows: the taskbars, and in this process Session Island's panel (it spans the edge, so only its region,
+// the island's shape now, counts) and PillTaskbar's islands.
+void App::FindEdgeWindows() {
+    edgeWindows_.clear();
+    for (PCWSTR cls : {L"Shell_TrayWnd", L"Shell_SecondaryTrayWnd"})
+        for (HWND w = nullptr; (w = FindWindowExW(nullptr, w, cls, nullptr));) edgeWindows_.push_back({w, false});
+    EnumWindows(
+        [](HWND w, LPARAM p) -> BOOL {
+            auto* list = reinterpret_cast<std::vector<std::pair<HWND, bool>>*>(p);
+            DWORD pid = 0;
+            GetWindowThreadProcessId(w, &pid);
+            WCHAR name[64];
+            if (pid != GetCurrentProcessId() || !GetClassNameW(w, name, ARRAYSIZE(name))) return TRUE;
+            if (wcsncmp(name, L"SessionIslandPanel_", 19) == 0) list->push_back({w, true});
+            else if (wcsncmp(name, L"PillTaskbarIsland_", 18) == 0) list->push_back({w, false});
+            return TRUE;
+        },
+        reinterpret_cast<LPARAM>(&edgeWindows_));
+}
+
+// Their shapes on the cards' monitor now, in the window's units (a window's region where it has one, else the window).
+std::vector<rc::Box> App::Obstacles() {
+    // A window of them destroyed (kEdgeBackMs): seen on the list as it was, before FindEdgeWindows makes it anew.
+    double tick = Tick();
+    if (tick >= edgeBackUntil_) edgeWant_ = 0;
+    if (std::any_of(edgeWindows_.begin(), edgeWindows_.end(), [](const auto& e) { return !IsWindow(e.first); })) {
+        edgeWant_ = std::max(edgeWant_, edgeWindows_.size());
+        edgeBackUntil_ = tick + kEdgeBackMs;
+    }
+    bool looking = tick < edgeBackUntil_;
+    if (looking || edgeScan_-- <= 0) {
+        edgeScan_ = kEdgeRescan;
+        FindEdgeWindows();
+        // Back: as many as before, and shown (a window is built hidden, then placed and shown).
+        if (looking && edgeWindows_.size() >= edgeWant_ &&
+            std::all_of(edgeWindows_.begin(), edgeWindows_.end(), [](const auto& e) { return IsWindowVisible(e.first); }))
+            edgeBackUntil_ = 0;
+    }
+    std::vector<rc::Box> out;
+    MONITORINFO mi{};
+    mi.cbSize = sizeof(mi);
+    if (!GetMonitorInfoW(monitor_, &mi)) return out;
+    for (auto [w, regionOnly] : edgeWindows_) {
+        DWORD cloaked = 0;
+        if (!IsWindowVisible(w) || (SUCCEEDED(DwmGetWindowAttribute(w, DWMWA_CLOAKED, &cloaked, sizeof(cloaked))) && cloaked))
+            continue;
+        RECT win{}, box{}, on{};
+        if (!GetWindowRect(w, &win)) continue;
+        int kind = GetWindowRgnBox(w, &box);
+        if (kind == NULLREGION || (kind == ERROR && regionOnly)) continue;
+        if (kind == ERROR) box = win;
+        else OffsetRect(&box, win.left, win.top);
+        if (!IntersectRect(&on, &box, &mi.rcMonitor)) continue;
+        out.push_back({(on.left - work_.left) / scale_, (on.top - work_.top) / scale_, (on.right - on.left) / scale_,
+                       (on.bottom - on.top) / scale_});
+    }
+    return out;
+}
+
+bool SameBox(const rc::Box& a, const rc::Box& b) {
+    return a.x == b.x && a.y == b.y && a.w == b.w && a.h == b.h;
+}
+
+// What lies along the edges now; while a window of them destroyed is looked for (kEdgeBackMs), what they covered before
+// too, so the cards hold still for an island built anew instead of moving under it and back.
+std::vector<rc::Box> App::EdgesNow() {
+    std::vector<rc::Box> now = Obstacles();
+    if (Tick() < edgeBackUntil_)
+        for (const rc::Box& b : edges_)
+            if (std::none_of(now.begin(), now.end(), [&](const rc::Box& n) { return SameBox(n, b); })) now.push_back(b);
+    return now;
+}
+
+// Every kEdgeMs: with cards shown, a shape that opened, closed or moved lays them out again; without, nothing is read
+// (the next layout reads it first).
+void App::CheckEdges() {
+    if (hidden_ || std::none_of(slots_.begin(), slots_.end(), [](const auto& s) { return !s->gone; })) {
+        edgesStale_ = true;
+        return;
+    }
+    std::vector<rc::Box> now = EdgesNow();
+    if (!edgesStale_ && now.size() == edges_.size() && std::equal(now.begin(), now.end(), edges_.begin(), SameBox)) return;
+    edges_ = std::move(now);
+    edgesStale_ = false;
+    Layout();
 }
 
 void App::CheckFullscreen() {
@@ -1561,11 +2789,16 @@ void App::CheckFullscreen() {
     hidden_ = full;
     ShowWindow(hwnd_, full ? SW_HIDE : SW_SHOWNOACTIVATE);
     if (full) {
+        Detach(false);
         // Bloom's requests go back to Bloom's own cards while the cards are away.
-        for (auto& [session, a] : asks_) link_.Send("{\"t\":\"none\",\"id\":" + rc::JsonString(a.id) + "}");
+        for (auto& [session, a] : asks_)
+            if (!a.inRow) link_.Send("{\"t\":\"none\",\"id\":" + rc::JsonString(a.id) + "}");
         asks_.clear();
     }
-    for (auto& s : slots_) Spin(*s, !full && !s->gone && s->card.phase == rc::Phase::Work);
+    for (auto& s : slots_) {
+        Spin(*s, !full && !s->gone && s->card.phase == rc::Phase::Work);
+        Shine(*s);
+    }
     ArmFrames();
 }
 
@@ -1623,13 +2856,18 @@ LRESULT CALLBACK App::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
                     for (auto& s : self->slots_)
                         if (s.get() != under) s->hover = false, s->ptr = {};
                     self->Update();
+                } else if (wParam == kEdgeTimer) {
+                    self->CheckEdges();
                 } else if (wParam == kRegionTimer) {
                     KillTimer(hwnd, kRegionTimer);
                     self->SetRegion(false);
                 } else if (wParam == kMorphTimer) {
+                    // The pill drawn; the region follows once the moves are over (kRegionTimer).
                     KillTimer(hwnd, kMorphTimer);
                     self->Layout();
-                    self->SetRegion(false);
+                } else if (wParam == kPageTimer) {
+                    KillTimer(hwnd, kPageTimer);
+                    self->PageTurn();
                 }
                 return 0;
             case kSnapshotMsg: {
@@ -1645,6 +2883,17 @@ LRESULT CALLBACK App::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             case kLinkMsg:
                 if (self) self->OnLink(wParam, reinterpret_cast<std::string*>(lParam));
                 else delete reinterpret_cast<std::string*>(lParam);
+                return 0;
+            case kEditMsg:
+                if (self) self->OnEditBlur();
+                return 0;
+            case WM_CTLCOLOREDIT:
+                if (self && self->edit_ && reinterpret_cast<HWND>(lParam) == self->edit_)
+                    return self->EditColors(reinterpret_cast<HDC>(wParam));
+                break;
+            case WM_COMMAND:
+                if (self && self->edit_ && reinterpret_cast<HWND>(lParam) == self->edit_ && HIWORD(wParam) == EN_CHANGE)
+                    self->OnEditChange();
                 return 0;
             case WM_DISPLAYCHANGE:
             case WM_DPICHANGED:

@@ -12,6 +12,13 @@ Windows.UI.Composition setup, the fullscreen check, reading Bloom's accent and t
 follow Session island (https://github.com/hyeon1035298/SessionIsland_BloomAddon,
 GPL-3.0-only, same author).
 
+## Claude's mark
+
+The mark in each card's disc (`kClaudeMark` in `mod/rc_draw.h`) is Claude's logo, a trademark of
+Anthropic PBC, shown only to say the cards are about Claude Code's sessions. Its path data is the
+`claude.svg` of Simple Icons (https://simpleicons.org, data under CC0-1.0); the trademark stays its
+owner's and is not under this add-on's license.
+
 ## Session island's transcript reader (GPL-3.0-only, with MIT parts)
 
 Following Claude Code's transcripts is Session island's reader, used unchanged: its headers

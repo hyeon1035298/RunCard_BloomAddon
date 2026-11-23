@@ -5,7 +5,7 @@
 // not there, and makes sure the other end is this user's Bloom.exe in this Windows session: the pipe's owner is this
 // user (a pipe someone else made first under the same name is not), and its server runs in this session. Bloom passes on the permission requests and questions
 // Claude Code asks through Bloom's hook, and takes the answers back; the card also asks Bloom to open a session.
-// One UTF-8 JSON object per line (the protocol is in the plan, "Bloom 연결 (규약 v1)").
+// One UTF-8 JSON object per line (the protocol: Bloom's src/Bloom/App/RunCardProtocol.cs).
 //
 // The thread hands each line to the window as a message: (msg, kLine, new std::string) — the window deletes it —
 // and (msg, kUp, 0) / (msg, kDown, 0) when the line comes up or goes. Sending is the window's, at any time.
@@ -265,6 +265,27 @@ inline std::string JsonString(const std::string& s) {
         }
     }
     return out + "\"";
+}
+
+// A line that names one session: `kin` (ask Bloom for its parent and sub-sessions), `question` (the choices of the
+// question it waits on), `can` (whether it takes words).
+inline std::string SessionLine(const char* t, const std::string& session) {
+    return std::string("{\"t\":\"") + t + "\",\"session\":" + JsonString(session) + "}";
+}
+
+// `say`: words (UTF-8) for a session, with the choices picked for the question it waits on when there is one.
+inline std::string SayLine(const std::string& session, const std::string& text, const std::vector<std::vector<int>>* picks) {
+    std::string line = "{\"t\":\"say\",\"session\":" + JsonString(session) + ",\"text\":" + JsonString(text);
+    if (picks) {
+        line += ",\"picks\":[";
+        for (size_t i = 0; i < picks->size(); i++) {
+            line += i ? ",[" : "[";
+            for (size_t k = 0; k < (*picks)[i].size(); k++) line += (k ? "," : "") + std::to_string((*picks)[i][k]);
+            line += "]";
+        }
+        line += "]";
+    }
+    return line + "}";
 }
 
 }  // namespace rc
