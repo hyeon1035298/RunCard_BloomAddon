@@ -17,6 +17,7 @@ tools/run-host.cpp               test program: runs the runtime and the mod outs
 tools/build-run-host.sh          builds it
 build.sh                         builds with PillTaskbar_BloomAddon's tools
 tools/finish-bundle.py           adds settings.schema.json to the bundle and its addon.json
+.github/workflows/build.yml      builds on GitHub Actions and publishes a release for a v* tag
 public-files.txt                 this list
 .gitignore                       keeps build output out
 

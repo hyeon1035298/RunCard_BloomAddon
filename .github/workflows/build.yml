@@ -1,0 +1,158 @@
+# SPDX-License-Identifier: GPL-3.0-only
+name: build
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+
+# The pinned llvm-mingw release, the one with the LLVM Windhawk's compiler has (20.1.3), and its
+# zip's SHA-256. GitHub gives no digest for releases this old; the hash is the one in winget's
+# manifest for the same zip (microsoft/winget-pkgs, MartinStorsjo.LLVM-MinGW.UCRT 20.1.3-20250417).
+# The job fails while it is empty or wrong, so nothing unverified is ever run.
+env:
+  LLVM_MINGW_VERSION: "20250417"
+  LLVM_MINGW_FLAVOR: "ucrt-x86_64"
+  LLVM_MINGW_SHA256: "3eba4da7af9e0ad3b736c9ac09f772d4d927da59bfb4e3688003ec21b3ed83fe"
+  # The Windows SDK whose cppwinrt.exe writes the C++/WinRT headers (it is on the runner image).
+  WINDOWS_SDK_VERSION: "10.0.26100.0"
+  # The add-on tools (runtime, host, bundle scripts) come from PillTaskbar_BloomAddon at this commit.
+  PILL_REPO: "hyeon1035298/PillTaskbar_BloomAddon"
+  PILL_COMMIT: "cae1ccff863c1d544e7dc536939b0e9b0b50a65c"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ env.PILL_REPO }}
+          ref: ${{ env.PILL_COMMIT }}
+          path: pill
+
+      - name: Fetch llvm-mingw
+        run: |
+          if [ -z "$LLVM_MINGW_SHA256" ]; then
+            echo "LLVM_MINGW_SHA256 is empty: set it in .github/workflows/build.yml" >&2
+            exit 1
+          fi
+          name="llvm-mingw-${LLVM_MINGW_VERSION}-${LLVM_MINGW_FLAVOR}"
+          url="https://github.com/mstorsjo/llvm-mingw/releases/download/${LLVM_MINGW_VERSION}/${name}.zip"
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/llvm-mingw.zip" "$url"
+          echo "${LLVM_MINGW_SHA256}  $RUNNER_TEMP/llvm-mingw.zip" | sha256sum -c -
+          powershell -NoProfile -Command "Expand-Archive -LiteralPath \"\$env:RUNNER_TEMP\llvm-mingw.zip\" -DestinationPath \"\$env:RUNNER_TEMP\llvm-mingw\""
+          echo "CXX=$(cygpath -u "$RUNNER_TEMP")/llvm-mingw/${name}/bin/clang++.exe" >> "$GITHUB_ENV"
+
+      # llvm-mingw has no C++/WinRT headers: the SDK's cppwinrt.exe writes them from the SDK's
+      # metadata, and PillTaskbar's tools/build-addon.sh takes them from CPPWINRT_INCLUDE.
+      - name: C++/WinRT headers
+        run: |
+          sdk="/c/Program Files (x86)/Windows Kits/10"
+          "$sdk/bin/${WINDOWS_SDK_VERSION}/x64/cppwinrt.exe" -in "$WINDOWS_SDK_VERSION" \
+            -out "$(cygpath -w "$RUNNER_TEMP/winrt-headers")"
+          grep -m1 CPPWINRT_VERSION "$RUNNER_TEMP/winrt-headers/winrt/base.h"
+          echo "CPPWINRT_INCLUDE=$(cygpath -u "$RUNNER_TEMP")/winrt-headers" >> "$GITHUB_ENV"
+
+      - name: Compiler version
+        run: '"$CXX" --version'
+
+      - name: Build
+        run: PILL_ROOT="$GITHUB_WORKSPACE/pill" bash build.sh
+
+      # PillTaskbar's host, built with this add-on's names: its pure-logic checks. No explorer and
+      # no network; the exit code is the number of failed checks, so any failure fails the job.
+      - name: Host self-test
+        run: build/addon/RunCardHost.exe --self-test
+
+      - name: Write SOURCE.txt
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          {
+            echo "Source: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}"
+            echo "Tag: ${GITHUB_REF_NAME}"
+            echo "Commit: ${GITHUB_SHA}"
+            echo "Add-on tools: ${GITHUB_SERVER_URL}/${PILL_REPO}"
+            echo "Add-on tools commit: $(git -C pill rev-parse HEAD)"
+          } > build/addon/SOURCE.txt
+
+      - name: Stage release files
+        run: |
+          out="dist/RunCard_BloomAddon"
+          mkdir -p "$out"
+          cp LICENSE "$out/"
+          for f in RunCardHost.exe RunCardRuntime.dll RunCard.dll symbols.txt symbols-meta.txt \
+                   port-sources.txt addon.json settings.schema.json THIRD_PARTY.md THIRD_PARTY_NOTICES.txt SOURCE.txt; do
+            if [ -f "build/addon/$f" ]; then
+              cp "build/addon/$f" "$out/"
+            elif [ "$f" != SOURCE.txt ]; then
+              echo "missing build/addon/$f" >&2
+              exit 1
+            fi
+          done
+          if [[ "$GITHUB_REF" == refs/tags/v* && ! -f "$out/SOURCE.txt" ]]; then
+            echo "SOURCE.txt missing on a tag build" >&2
+            exit 1
+          fi
+          ls -l "$out"
+
+      - name: Zip
+        run: |
+          name="RunCard_BloomAddon-${GITHUB_REF_NAME//\//-}"
+          (cd dist/RunCard_BloomAddon && 7z a -tzip "../${name}.zip" . >/dev/null)
+          echo "ZIP_NAME=${name}.zip" >> "$GITHUB_ENV"
+          (cd dist && sha256sum "${name}.zip" | tee "${name}.zip.sha256")
+
+      # bloom-addon.json: how Bloom finds and checks this release. Bloom reads it from
+      # https://github.com/<repo>/releases/latest/download/bloom-addon.json, downloads the zip it names from
+      # the same release and installs it only when the zip has this sha256 and size and its addon.json this id,
+      # version and minBloom. A tag must be v<addon.json's version>: Bloom takes the zip from that tag.
+      - name: bloom-addon.json
+        run: |
+          python -I - "dist/${ZIP_NAME}" build/addon/addon.json "$GITHUB_REF" > dist/bloom-addon.json <<'PY'
+          import hashlib, json, os, sys
+          zip_path, manifest, ref = sys.argv[1:4]
+          with open(manifest, encoding="utf-8") as f:
+              m = json.load(f)
+          if ref.startswith("refs/tags/") and ref[len("refs/tags/"):] != "v" + m["version"]:
+              sys.exit(f"the tag {ref} is not v{m['version']}, the version addon.json gives")
+          with open(zip_path, "rb") as f:
+              data = f.read()
+          json.dump({"id": m["id"], "version": m["version"], "zip": os.path.basename(zip_path),
+                     "sha256": hashlib.sha256(data).hexdigest(), "size": len(data), "minBloom": m["minBloom"]}, sys.stdout, indent=2)
+          PY
+          cat dist/bloom-addon.json
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: addon
+          path: |
+            dist/*.zip
+            dist/*.sha256
+            dist/bloom-addon.json
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: addon
+          path: dist
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --repo "$GITHUB_REPOSITORY" --title "$GITHUB_REF_NAME" --generate-notes
