@@ -6,8 +6,5 @@ pill/
 *.a
 __pycache__/
 
-# Session island's reader headers, copied in by tools/stage-si.sh at each build
-mod/si/
-
 # Debug symbols stay local
 *.pdb

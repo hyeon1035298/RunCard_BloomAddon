@@ -7,7 +7,6 @@
 set -euo pipefail
 
 here="$(cd "$(dirname "$0")/.." && pwd)"
-bash "$here/tools/stage-si.sh"
 cxx="${CXX:-/c/Program Files/Windhawk/Compiler/bin/clang++.exe}"
 out="$here/build/test"
 mkdir -p "$out"

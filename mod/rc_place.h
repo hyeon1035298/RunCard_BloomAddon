@@ -138,9 +138,9 @@ inline float RoomAcross(Box area, float margin) {
 }
 
 // ---- keeping clear of what sits on the monitor's edges --------------------------------------------------------
-// Session Island's shape (at rest, open, or between), a taskbar slid out over the work area, PillTaskbar's islands:
-// each lies along an edge of the monitor. A card of the stack that would touch one moves that side of the area past
-// it, so the stack starts beside it; the stack follows as the shape opens and closes.
+// A taskbar slid out over the work area, PillTaskbar's islands: each lies along an edge of the monitor. A card of the
+// stack that would touch one moves that side of the area past it, so the stack starts beside it; the stack follows as
+// the shape changes.
 
 enum class Edge : uint8_t { None, Top, Bottom, Left, Right };
 

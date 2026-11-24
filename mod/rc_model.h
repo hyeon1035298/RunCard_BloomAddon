@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //
-// Run card: what one card says, made from the session the transcript reader hands over (si::SessionView, from
-// Session island's reader) and, while the session waits on Bloom, the request Bloom passed on (Ask).
+// Run card: what one card says, made from the session the transcript reader (si/) hands over (si::SessionView)
+// and, while the session waits on Bloom, the request Bloom passed on (Ask).
 //
 // The card covers the current turn only: the steps since the person's last message. A step is one tool call, or a
 // run of calls of the same kind one after another ("Read 12 files"); its label says what was done in a few words.

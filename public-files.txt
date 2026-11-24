@@ -5,23 +5,23 @@
 LICENSE                          GPL-3.0-only text, required for distribution
 README.md                        English readme
 README.ko.md                     Korean readme
-THIRD_PARTY.md                   sources, credits (the design, SessionIsland's reader with lot-map's MIT text) and the runtime's libraries, shipped in the zip
+THIRD_PARTY.md                   sources, credits (the design, the reader's lot-map port with lot-map's MIT text) and the runtime's libraries, shipped in the zip
 addon.conf                       the add-on's names, version and manifest fields
 settings.schema.json             the settings Bloom shows and sets, shipped in the zip
 mod/run-card.wh.cpp              the mod: the cards' window, Composition, input, the sessions, Bloom's requests, settings
 mod/rc_*.h                       the mod's headers: card model, drawing, placing, the line to Bloom
-tools/stage-si.sh                copies SessionIsland_BloomAddon's reader headers into mod/si for the build
+mod/si/*.h                       the transcript reader the cards are made from, and drawing helpers
 tools/card-host.cpp              test program: draws the card states to PNG and checks the model
 tools/build-card-host.sh         builds it
 tools/run-host.cpp               test program: runs the runtime and the mod outside explorer, with a stand-in Bloom
 tools/build-run-host.sh          builds it
 build.sh                         builds with PillTaskbar_BloomAddon's tools
+tools/finish-bundle.py           adds settings.schema.json to the bundle and its addon.json
 public-files.txt                 this list
 .gitignore                       keeps build output out
 
 [private]
 docs/**                          local notes, not in the repository
-mod/si/**                        staged copy of SessionIsland_BloomAddon's headers
 build/**                         build output
 dist/**                          release staging
 pill/**                          a local PillTaskbar_BloomAddon checkout

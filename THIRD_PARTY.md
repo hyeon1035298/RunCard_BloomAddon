@@ -7,10 +7,7 @@ GNU General Public License, version 3 only (`LICENSE`). It combines the parts be
 
 `mod/run-card.wh.cpp` and its headers `mod/rc_*.h` (built into `RunCard.dll`) and the test
 program `tools/card-host.cpp` were written for this add-on. The card's layout follows a
-run-status card design shared by @eliakuratli (a picture of a UI, no code). The window's
-Windows.UI.Composition setup, the fullscreen check, reading Bloom's accent and the UI thread
-follow Session island (https://github.com/hyeon1035298/SessionIsland_BloomAddon,
-GPL-3.0-only, same author).
+run-status card design shared by @eliakuratli (a picture of a UI, no code).
 
 ## Claude's mark
 
@@ -19,15 +16,13 @@ Anthropic PBC, shown only to say the cards are about Claude Code's sessions. Its
 `claude.svg` of Simple Icons (https://simpleicons.org, data under CC0-1.0); the trademark stays its
 owner's and is not under this add-on's license.
 
-## Session island's transcript reader (GPL-3.0-only, with MIT parts)
+## The transcript reader (GPL-3.0-only, with MIT parts)
 
-Following Claude Code's transcripts is Session island's reader, used unchanged: its headers
-`si_model.h`, `si_json.h`, `si_lotmap.h`, `si_board.h`, `si_store.h` and `si_draw.h` are copied
-from a SessionIsland_BloomAddon checkout into `mod/si/` at build time (`tools/stage-si.sh`), and
-its bundle finisher `tools/finish-bundle.py` is run from there. Parts of the reader are lot-map
-v0.7.0 (https://github.com/alexeyw/lot-map, commit 09f6b93cd57e0ceb78cbcab9715a30b80c36388b)
-moved to C++, chiefly how a tool call is sorted and labelled (`hooks/classify.ts`); they are
-marked in those headers. lot-map's license:
+Following Claude Code's transcripts is the reader in `mod/si/`: `si_model.h`, `si_json.h`,
+`si_lotmap.h`, `si_board.h` and `si_store.h`, with drawing helpers in `si_draw.h`. Parts of the
+reader are lot-map v0.7.0 (https://github.com/alexeyw/lot-map, commit
+09f6b93cd57e0ceb78cbcab9715a30b80c36388b) moved to C++, chiefly how a tool call is sorted and
+labelled (`hooks/classify.ts`); they are marked in those headers. lot-map's license:
 
 ```
 MIT License

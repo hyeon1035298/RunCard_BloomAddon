@@ -45,8 +45,8 @@ older Bloom the cards still show and approvals come as Bloom's cards.
 
 ## Build
 
-`bash build.sh` with PillTaskbar_BloomAddon's add-on tools and SessionIsland_BloomAddon's
-transcript reader next to this folder (or `PILL_ROOT`, `SI_ROOT`). It writes `build/addon`:
+`bash build.sh` with PillTaskbar_BloomAddon's add-on tools next to this folder (or `PILL_ROOT`).
+It writes `build/addon`:
 `RunCardHost.exe`, `RunCardRuntime.dll`, `RunCard.dll`, `addon.json`, `settings.schema.json` and
 the license notices.
 

@@ -23,8 +23,8 @@ opens. When a session asks for a permission or puts a question, Bloom passes it 
 Allow and Deny or the choices to pick; when the turn is done the card says how long it took and how many files
 changed, then goes. Several sessions stack from the chosen place.
 
-Nothing is installed into Claude Code: the cards read the transcripts Claude Code writes (Session island's reader)
-and the status files beside them, and use no tokens. At rest nothing moves or redraws.
+Nothing is installed into Claude Code: the cards read the transcripts Claude Code writes and the status files
+beside them, and use no tokens. At rest nothing moves or redraws.
 */
 // ==/WindhawkModReadme==
 
@@ -365,7 +365,7 @@ Config ReadConfig() {
 
 // ============================================================================
 // Bloom's accent (its settings.json: "accent", a preset, or "custom" with "accentCustom" #RRGGBB, the light
-// theme's colour), with Bloom's own pairs, as the other add-ons read it (Session island ReadAccent).
+// theme's colour), with Bloom's own pairs.
 // ============================================================================
 
 struct AccentPair {
@@ -651,7 +651,7 @@ constexpr int kSayMax = 20000;             // the most characters a send carries
 constexpr UINT_PTR kTickTimer = 1, kLeaveTimer = 2, kRegionTimer = 3, kMorphTimer = 4, kEdgeTimer = 5, kPageTimer = 6;
 constexpr UINT kPageMs = 320;     // a question picked, the card turns to the next one this much later (the pick seen)
 constexpr UINT kEdgeMs = 120;      // what lies along the edges is read this often while there are cards (they follow it)
-constexpr int kEdgeRescan = 4;     // ... and its windows are looked for again every so many reads (as Session Island)
+constexpr int kEdgeRescan = 4;     // ... and its windows are looked for again every so many reads
 // A window of them destroyed (PillTaskbar builds its island window anew on most of its setting changes, Bloom's theme
 // among them): they are looked for at every read until as many are there again, this long at most, the cards keeping
 // clear of what it covered meanwhile.
@@ -798,7 +798,7 @@ private:
     rc::Box mon_;   // the monitor, in the same units
     rc::Box room_;  // the part of the area the cards keep to: clear of what lies along the edges (rc::Clear)
     std::vector<rc::Box> edges_;  // what lies along the monitor's edges now (Obstacles)
-    std::vector<std::pair<HWND, bool>> edgeWindows_;  // their windows, and whether only a window's region counts
+    std::vector<HWND> edgeWindows_;  // their windows
     int edgeScan_ = 0;
     double edgeBackUntil_ = 0;  // a window of them destroyed: looked for until then (kEdgeBackMs)
     size_t edgeWant_ = 0;       // ... until there are as many as this again
@@ -1475,7 +1475,7 @@ void App::Layout() {
     };
     std::vector<rc::Size> sizes;
     for (Slot* s : list) sizes.push_back(sizeOf(s));
-    // Clear of what lies along the monitor's edges (Session Island, PillTaskbar's islands, a taskbar slid out).
+    // Clear of what lies along the monitor's edges (PillTaskbar's islands, a taskbar slid out).
     if (edgesStale_) {
         edges_ = EdgesNow();
         edgesStale_ = false;
@@ -2668,7 +2668,7 @@ LRESULT CALLBACK App::EditProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
 }
 
 // ---- fullscreen ---------------------------------------------------------------------------------------------
-// A fullscreen app (a game, a video) on the cards' monitor keeps them away, as Session island does.
+// A fullscreen app (a game, a video) on the cards' monitor keeps them away.
 
 bool CoversMonitor(HWND window, const RECT& monitor) {
     RECT rc;
@@ -2683,24 +2683,22 @@ bool IsShellWindow(HWND window) {
 }
 
 // ---- what lies along the monitor's edges -------------------------------------------------------------------------
-// The cards keep clear of it (rc::Clear) and follow it as it changes: Session Island opening and closing, a hidden
-// taskbar sliding out from PillTaskbar's island and back.
+// The cards keep clear of it (rc::Clear) and follow it as it changes: a hidden taskbar sliding out from PillTaskbar's
+// island and back.
 
-// Their windows: the taskbars, and in this process Session Island's panel (it spans the edge, so only its region,
-// the island's shape now, counts) and PillTaskbar's islands.
+// Their windows: the taskbars, and in this process PillTaskbar's islands.
 void App::FindEdgeWindows() {
     edgeWindows_.clear();
     for (PCWSTR cls : {L"Shell_TrayWnd", L"Shell_SecondaryTrayWnd"})
-        for (HWND w = nullptr; (w = FindWindowExW(nullptr, w, cls, nullptr));) edgeWindows_.push_back({w, false});
+        for (HWND w = nullptr; (w = FindWindowExW(nullptr, w, cls, nullptr));) edgeWindows_.push_back(w);
     EnumWindows(
         [](HWND w, LPARAM p) -> BOOL {
-            auto* list = reinterpret_cast<std::vector<std::pair<HWND, bool>>*>(p);
+            auto* list = reinterpret_cast<std::vector<HWND>*>(p);
             DWORD pid = 0;
             GetWindowThreadProcessId(w, &pid);
             WCHAR name[64];
             if (pid != GetCurrentProcessId() || !GetClassNameW(w, name, ARRAYSIZE(name))) return TRUE;
-            if (wcsncmp(name, L"SessionIslandPanel_", 19) == 0) list->push_back({w, true});
-            else if (wcsncmp(name, L"PillTaskbarIsland_", 18) == 0) list->push_back({w, false});
+            if (wcsncmp(name, L"PillTaskbarIsland_", 18) == 0) list->push_back(w);
             return TRUE;
         },
         reinterpret_cast<LPARAM>(&edgeWindows_));
@@ -2711,7 +2709,7 @@ std::vector<rc::Box> App::Obstacles() {
     // A window of them destroyed (kEdgeBackMs): seen on the list as it was, before FindEdgeWindows makes it anew.
     double tick = Tick();
     if (tick >= edgeBackUntil_) edgeWant_ = 0;
-    if (std::any_of(edgeWindows_.begin(), edgeWindows_.end(), [](const auto& e) { return !IsWindow(e.first); })) {
+    if (std::any_of(edgeWindows_.begin(), edgeWindows_.end(), [](HWND w) { return !IsWindow(w); })) {
         edgeWant_ = std::max(edgeWant_, edgeWindows_.size());
         edgeBackUntil_ = tick + kEdgeBackMs;
     }
@@ -2721,21 +2719,21 @@ std::vector<rc::Box> App::Obstacles() {
         FindEdgeWindows();
         // Back: as many as before, and shown (a window is built hidden, then placed and shown).
         if (looking && edgeWindows_.size() >= edgeWant_ &&
-            std::all_of(edgeWindows_.begin(), edgeWindows_.end(), [](const auto& e) { return IsWindowVisible(e.first); }))
+            std::all_of(edgeWindows_.begin(), edgeWindows_.end(), [](HWND w) { return IsWindowVisible(w); }))
             edgeBackUntil_ = 0;
     }
     std::vector<rc::Box> out;
     MONITORINFO mi{};
     mi.cbSize = sizeof(mi);
     if (!GetMonitorInfoW(monitor_, &mi)) return out;
-    for (auto [w, regionOnly] : edgeWindows_) {
+    for (HWND w : edgeWindows_) {
         DWORD cloaked = 0;
         if (!IsWindowVisible(w) || (SUCCEEDED(DwmGetWindowAttribute(w, DWMWA_CLOAKED, &cloaked, sizeof(cloaked))) && cloaked))
             continue;
         RECT win{}, box{}, on{};
         if (!GetWindowRect(w, &win)) continue;
         int kind = GetWindowRgnBox(w, &box);
-        if (kind == NULLREGION || (kind == ERROR && regionOnly)) continue;
+        if (kind == NULLREGION) continue;
         if (kind == ERROR) box = win;
         else OffsetRect(&box, win.left, win.top);
         if (!IntersectRect(&on, &box, &mi.rcMonitor)) continue;

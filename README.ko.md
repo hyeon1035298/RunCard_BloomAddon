@@ -42,9 +42,9 @@ Bloom에서도 카드는 뜨고, 승인은 Bloom 카드로 옵니다.
 
 ## 빌드
 
-`bash build.sh` (PillTaskbar_BloomAddon의 애드온 도구와 SessionIsland_BloomAddon의 기록 읽기 코드가
-옆 폴더에 있거나 `PILL_ROOT`, `SI_ROOT`). `build/addon`에 `RunCardHost.exe`, `RunCardRuntime.dll`,
-`RunCard.dll`, `addon.json`, `settings.schema.json`, 고지 파일이 나옵니다.
+`bash build.sh` (PillTaskbar_BloomAddon의 애드온 도구가 옆 폴더에 있거나 `PILL_ROOT`). `build/addon`에
+`RunCardHost.exe`, `RunCardRuntime.dll`, `RunCard.dll`, `addon.json`, `settings.schema.json`, 고지 파일이
+나옵니다.
 
 시험: `bash tools/build-card-host.sh`(카드 그림을 PNG로, 모델 검사), `bash tools/build-run-host.sh`
 (런타임과 애드온을 explorer 밖에서 실행하고, Bloom 대역을 세워 승인·질문 응답을 확인).
