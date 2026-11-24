@@ -578,6 +578,7 @@ struct Shot {
     Ms now;
     rc::Pointer ptr;
     std::optional<rc::Motion> motion;  // a moment of a change (the window's frames)
+    bool icon = false;                 // folded as its mark alone (pill.width = icon)
 };
 
 bool SavePng(IWICImagingFactory* wic, IWICBitmap* bitmap, const wchar_t* path) {
@@ -607,7 +608,9 @@ bool Render(ID2D1Factory1* d2d, IWICImagingFactory* wic, rc::Painter& painter, c
     for (auto& row : rows) {
         float w = kMargin, h = 0;
         for (auto& s : row) {
+            painter.IconPill(s.icon);
             rc::Laid L = painter.Run(nullptr, s.card, AskOf(s), s.view, measure, s.now, s.ptr, ko, false, MotionOf(s));
+            painter.IconPill(false);
             w += L.w + kGap;
             h = std::max(h, L.h);
         }
@@ -641,7 +644,9 @@ bool Render(ID2D1Factory1* d2d, IWICImagingFactory* wic, rc::Painter& painter, c
             float x = kMargin;
             for (auto& s : rows[r]) {
                 dc->SetTransform(D2D1::Matrix3x2F::Translation(x, y) * D2D1::Matrix3x2F::Scale(kScale, kScale));
+                painter.IconPill(s.icon);
                 rc::Laid L = painter.Run(dc.Get(), s.card, AskOf(s), s.view, p, s.now, s.ptr, ko, true, MotionOf(s));
+                painter.IconPill(false);
                 x += L.w + kGap;
             }
             y += rowH[r] + kGap;
@@ -666,6 +671,7 @@ struct Picture {
 
 Picture Draw1(ID2D1Factory1* d2d, IWICImagingFactory* wic, rc::Painter& painter, const Shot& s, const rc::Palette& p, bool ko) {
     Picture out;
+    painter.IconPill(s.icon);
     rc::Laid L = painter.Run(nullptr, s.card, AskOf(s), s.view, p, s.now, s.ptr, ko, false, MotionOf(s));
     out.w = UINT(std::ceil(L.w * 2));
     out.h = UINT(std::ceil(L.h * 2));
@@ -682,6 +688,7 @@ Picture Draw1(ID2D1Factory1* d2d, IWICImagingFactory* wic, rc::Painter& painter,
     dc->Clear(D2D1::ColorF(0, 0));
     dc->SetTransform(D2D1::Matrix3x2F::Scale(2, 2));
     out.laid = painter.Run(dc.Get(), s.card, AskOf(s), s.view, p, s.now, s.ptr, ko, false, MotionOf(s));
+    painter.IconPill(false);
     if (FAILED(dc->EndDraw())) return out;
     out.px.resize(size_t(out.w) * out.h * 4);
     bitmap->CopyPixels(nullptr, out.w * 4, UINT(out.px.size()), out.px.data());
@@ -966,6 +973,60 @@ int wmain(int argc, wchar_t** argv) {
         rc::Laid S = laid(single);
         Check(!has(S, rc::Act::Page, 1) && !has(S, rc::Act::Page, -1), "pages: one question has no pager");
     }
+    // A T3 question with long texts: no other card shows it, so the card does, with more lines (a note of five lines
+    // whole, a longer one ending in an ellipsis at six), and with fewer where the room is short.
+    rc::Ask longQ = t3q, longTight = t3q;
+    {
+        rc::Question l = q;
+        l.header = ko ? L"환불" : L"Refunds";
+        l.text = ko ? L"이미 나간 청구서의 차액은 어떻게 돌려줄까요? 지난달 청구서 가운데 반올림이 달라지는 것이 40건쯤 있고, 금액은 건마다 1센트입니다."
+                    : L"How should the difference on invoices already sent go back? About 40 of last month's invoices round differently, by one cent each.";
+        l.choices = {
+            {ko ? L"다음 청구서에서 빼기 (추천)" : L"Take it off the next invoice (Recommended)",
+             ko ? L"다음 달 청구서에 차액만큼 빼는 줄을 한 줄 넣습니다. 고객이 따로 할 일이 없고, 회계 쪽에서는 월말 대사에 그 줄이 그대로 보입니다. 해지한 고객에게는 다음 청구서가 없어서 따로 환불해야 합니다."
+                : L"Adds one line to next month's invoice taking the difference off. The customer has nothing to do, and accounting sees that line as it is in the month-end reconciliation. A customer who has cancelled has no next invoice and needs a refund of their own."},
+            {ko ? L"바로 환불하기" : L"Refund now",
+             ko ? L"결제 수단으로 차액을 바로 돌려보냅니다. 1센트짜리 환불이 40건쯤 나가고, 건마다 결제 대행사의 환불 기록과 고객에게 가는 알림 메일이 하나씩 생깁니다. 카드사에 따라 명세서에 찍히기까지 며칠이 걸리고, 그동안 문의가 올 수 있습니다. 환불 수수료는 없지만 대행사 화면에서 건별로 확인해야 하며, 실패한 환불은 다음 날 다시 시도합니다."
+                : L"Sends the difference back to the payment method at once. About 40 refunds of one cent go out, each with its own record at the payment processor and its own notice to the customer. Some card issuers take days to show it on the statement, and questions may come in meanwhile. There is no refund fee, but each one has to be checked on the processor's page, and a refund that fails is tried again the next day."},
+            {ko ? L"그대로 두기" : L"Leave them", L""}};
+        longQ.questions = {l};
+        longQ.picks = {{}};
+        longTight = longQ;
+        longTight.tight = 2;
+        rc::Palette p = rc::MakePalette(false, accentDark);
+        auto laid = [&](const rc::Ask& a) { return painter.Run(nullptr, asked, &a, rc::View::Card, p, now, {}, ko); };
+        auto picks = [](const rc::Laid& L) {
+            int n = 0;
+            for (auto& h : L.hits) n += h.act == rc::Act::Pick;
+            return n;
+        };
+        rc::Ask bloomsOwn = longQ, bare = longQ;
+        bloomsOwn.inRow = false;
+        bare.tight = 99;  // past the last step: the last step's lines
+        float whole = laid(longQ).h, tight = laid(longTight).h, least = laid(bare).h;
+        Check(!painter.Fits(bloomsOwn, ko) && bloomsOwn.Lines().about == rc::kWholeLines.about,
+              "long question: as Bloom's request it goes to Bloom's card");
+        Check(longQ.Lines().about > rc::kWholeLines.about && whole > tight && tight > least,
+              "long question: a T3 session's takes more lines, and fewer at each step down");
+        Check(picks(laid(longQ)) == 3 && picks(laid(longTight)) == 3 && picks(laid(bare)) == 3,
+              "long question: every choice stays to pick at every step");
+    }
+    // Folded as the mark alone (pill.width = icon): a circle the pill's height, the whole of it the header; the card
+    // it opens into is the same card.
+    {
+        rc::Palette p = rc::MakePalette(false, accentDark);
+        float cardW = painter.Run(nullptr, work, nullptr, rc::View::Card, p, now, {}, ko).w;
+        painter.IconPill(true);
+        rc::Laid I = painter.Run(nullptr, work, nullptr, rc::View::Pill, p, now, {}, ko);
+        bool header = false, other = false;
+        for (auto& h : I.hits) (h.act == rc::Act::Header ? header : other) = true;
+        Check(I.w == rc::kPillH && I.h == rc::kPillH && I.markAt.x == rc::kPillH / 2 && I.markAt.y == rc::kPillH / 2,
+              "icon pill: a circle the pill's height, the mark at its middle");
+        Check(header && !other && !I.shine, "icon pill: the whole of it is the header, no close button, no light");
+        Check(painter.Run(nullptr, work, nullptr, rc::View::Card, p, now, {}, ko).w == cardW, "icon pill: the card it opens into is the same");
+        painter.IconPill(false);
+        Check(painter.Run(nullptr, work, nullptr, rc::View::Pill, p, now, {}, ko).w == rc::kCardW, "icon pill: off, the pill is a pill again");
+    }
     // Contrast: every word of the card at 4.5:1 or more on what it is drawn on (the body over a black or a white desk,
     // a hovered or picked choice, the row to type in, an accent button), dark and light, Bloom's rose and gray.
     {
@@ -1125,6 +1186,22 @@ int wmain(int argc, wchar_t** argv) {
          {asked, pagesFirst, rc::View::Card, now, {}},
          {asked, pagesLast, rc::View::Card, now, {}},
          {work, relayed, rc::View::Card, now, {rc::Act::Pick, 1, 0}}},
+        // A T3 question with long texts: whole within six lines and an ellipsis past them; cut further for a short room.
+        {{asked, longQ, rc::View::Card, now, {}}, {asked, longTight, rc::View::Card, now, {}}},
+        // Folded as the mark alone: at work (the ring), waiting on an answer (the dot), done, stopped; and a card
+        // opening from it, the clock coming in as the clip clears the headline's start.
+        {{work, std::nullopt, rc::View::Pill, now, {}, std::nullopt, true},
+         {asked, std::nullopt, rc::View::Pill, now, {}, std::nullopt, true},
+         {done, std::nullopt, rc::View::Pill, kT0 + 20000, {}, std::nullopt, true},
+         {stopped, std::nullopt, rc::View::Pill, kT0 + 20000, {}, std::nullopt, true},
+         {work, std::nullopt, rc::View::Card, now, {}, moment([&](rc::Motion& m) {
+              m.open = 0.2f;
+              m.pillW = rc::kPillH;
+          })},
+         {work, std::nullopt, rc::View::Card, now, {}, moment([&](rc::Motion& m) {
+              m.open = 0.6f;
+              m.pillW = rc::kPillH;
+          })}},
         // Sub-work: the merged steps, a sub-session's question, the turn over while subs work, a subagent's request.
         {{family, std::nullopt, rc::View::Card, now, {}},
          {subAsked, subQ, rc::View::Card, now, {}},

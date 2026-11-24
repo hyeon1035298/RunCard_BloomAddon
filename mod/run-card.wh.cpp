@@ -344,7 +344,8 @@ struct Config {
     bool approvals = true;
     bool subtasks = false;  // card.subtasks: subs' steps on the main card (else its own only)
     ThemeChoice theme = ThemeChoice::System;
-    bool samePill = true;  // pill.width: same (else fit, as wide as its words)
+    // pill.width, a folded card's shape: a pill as wide as a card, one as wide as its words, or the mark alone.
+    enum class Fold { Same, Fit, Icon } fold = Fold::Same;
 };
 
 std::wstring StringSetting(PCWSTR name) {
@@ -369,7 +370,8 @@ Config ReadConfig() {
     c.subtasks = Wh_GetIntSetting(L"card.subtasks") != 0;
     std::wstring theme = StringSetting(L"pill.theme");
     c.theme = theme == L"dark" ? ThemeChoice::Dark : theme == L"light" ? ThemeChoice::Light : ThemeChoice::System;
-    c.samePill = StringSetting(L"pill.width") != L"fit";
+    std::wstring fold = StringSetting(L"pill.width");
+    c.fold = fold == L"fit" ? Config::Fold::Fit : fold == L"icon" ? Config::Fold::Icon : Config::Fold::Same;
     return c;
 }
 
@@ -765,6 +767,7 @@ private:
         rc::Ms canTurn = 0;      // the turn it was asked for
         int canAgain = 0;        // asked again since it came (kCanAgainMs)
         double madeAt = 0;       // when its card came
+        bool markHeld = false;   // opened from its mark alone, the pointer still on the mark: not the close button yet
         bool composing = false;  // its row is the box to type in
         bool askOpened = false;  // the row was opened for the question the session waits on (once a question)
         std::string askFor;      // ... the session asking: the card's own, or a sub-session of it (the answer goes there)
@@ -931,7 +934,14 @@ private:
     float Margin() const { return cfg_.margin * 100.0f / float(cfg_.size); }
     // Every pill's width with pill.width = same: a card's, or in a row a shorter one, so folding a card narrows the
     // row; 0 with fit.
-    float PillW() const { return !cfg_.samePill ? 0 : rc::Across(cfg_.anchor, cfg_.row) ? rc::kRowPillW : rc::kCardW; }
+    float PillW() const {
+        return cfg_.fold != Config::Fold::Same ? 0 : rc::Across(cfg_.anchor, cfg_.row) ? rc::kRowPillW : rc::kCardW;
+    }
+    // The folded shape the settings ask for, to the painter.
+    void FoldShape() {
+        painter_->SamePill(PillW());
+        painter_->IconPill(cfg_.fold == Config::Fold::Icon);
+    }
 };
 
 App* g_app = nullptr;
@@ -1013,7 +1023,7 @@ bool App::Start() {
     if (!frameTimer_) frameTimer_ = CreateWaitableTimerExW(nullptr, nullptr, 0, TIMER_ALL_ACCESS);
 
     cfg_ = ReadConfig();
-    painter_->SamePill(PillW());
+    FoldShape();
     ReadLook(true);
     Place();
     SetRegion(false);
@@ -2043,7 +2053,7 @@ void App::OnSnapshot(size_t folder, std::shared_ptr<const si::Snapshot> s) {
 void App::OnSettings() {
     Config old = cfg_;
     cfg_ = ReadConfig();
-    painter_->SamePill(PillW());
+    FoldShape();
     if (old.approvals != cfg_.approvals)
         link_.Send(std::string("{\"t\":\"prefs\",\"approvals\":") + (cfg_.approvals ? "true" : "false") + "}");
     ReadLook(true);
@@ -2213,6 +2223,13 @@ void App::OnMouse(UINT msg, LPARAM lParam) {
     POINT p{GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
     rc::Hit hit;
     Slot* s = At(p, &hit);
+    // A card opened from its mark alone (pill.width = icon) may have the pointer right where its mark is: there the
+    // mark stays part of the header (a click opens the session) until the pointer has left it once, so that a click
+    // meant for the folded mark does not close the card.
+    if (s && s->markHeld) {
+        if (hit.act == rc::Act::Close) hit.act = rc::Act::Header;
+        else s->markHeld = false;
+    }
     if (msg == WM_MOUSEMOVE) {
         if (!tracking_) {
             TRACKMOUSEEVENT tme{sizeof(tme), TME_LEAVE, hwnd_, 0};
@@ -2223,6 +2240,7 @@ void App::OnMouse(UINT msg, LPARAM lParam) {
             bool on = k.get() == s;
             if (k->hover != on) {
                 k->hover = on;
+                if (!on) k->markHeld = false;
                 changed = true;
             }
             rc::Pointer ptr = on ? rc::Pointer{hit.act, hit.q, hit.choice, false} : rc::Pointer{};
@@ -2233,7 +2251,10 @@ void App::OnMouse(UINT msg, LPARAM lParam) {
         }
         if (s) KillTimer(hwnd_, kLeaveTimer);
         if (changed) {
-            if (s && !s->open && !cfg_.always) Update();  // opens now
+            if (s && !s->open && !cfg_.always) {
+                s->markHeld = cfg_.fold == Config::Fold::Icon;
+                Update();  // opens now
+            }
             else if (!s) SetTimer(hwnd_, kLeaveTimer, kLeaveMs, nullptr);
             else Layout();
         }
@@ -2874,7 +2895,7 @@ LRESULT CALLBACK App::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
                     ScreenToClient(hwnd, &p);
                     App::Slot* under = self->At(p, nullptr);
                     for (auto& s : self->slots_)
-                        if (s.get() != under) s->hover = false, s->ptr = {};
+                        if (s.get() != under) s->hover = false, s->markHeld = false, s->ptr = {};
                     self->Update();
                 } else if (wParam == kEdgeTimer) {
                     self->CheckEdges();

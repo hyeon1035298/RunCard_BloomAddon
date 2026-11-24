@@ -89,6 +89,7 @@ constexpr float kPillH = 38;
 constexpr float kPillMinW = 196;
 // A pill of a row (card.arrange = row) with pill.width = same: shorter than a card, so folding a card narrows the row.
 constexpr float kRowPillW = 220;
+constexpr float kClockIn = 40;    // the clock of a card opening from its mark alone fades in over this much room
 constexpr float kMark = 22;       // the mark's circle
 constexpr float kMarkLeft = 9;    // from the left edge, pill and card alike
 constexpr float kHeaderH = 24;
@@ -329,6 +330,18 @@ public:
             dc_->SetTextAntialiasMode(D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE);
         }
         Phase phase = ask ? Phase::Approve : c.phase;
+        if (view == View::Pill && iconPill_) {
+            // The mark alone, in a circle the pill's height: its ring, dot or tick says how the session stands.
+            L.w = L.h = kPillH;
+            if (m.size < 1 && m.wasW > 0) L.w = m.wasW + (L.w - m.wasW) * Ease(m.size);
+            L.markAt = {kPillH / 2, kPillH / 2};
+            if (dc_) {
+                Body(L.w, kPillH, kPillH / 2);
+                Mark(L.markAt, phase, c, ring, m);
+            }
+            L.hits.push_back({{0, 0, L.w, kPillH}, Act::Header});
+            return L;
+        }
         std::wstring headline = Headline(c, ask, phase);
         // The clock runs while the turn or its subs work; then it says how long it all took.
         std::wstring clock = Clock((!c.turnEnd || SubsAtWork(c) > 0 ? now : std::max(*c.turnEnd, c.subsEnd)) - c.turnStart);
@@ -363,7 +376,8 @@ public:
             else Mark(L.markAt, phase, c, ring, m);
             // The headline: a new one rises in as the old one rises out, inside the header's band. At rest a working
             // one is drawn in its resting tone for the light the window sweeps over it.
-            dc_->PushAxisAlignedClip({markX + kMark / 2 + 7, 0, clockX - 6, kPillH}, D2D1_ANTIALIAS_MODE_ALIASED);
+            float titleLeft = markX + kMark / 2 + 7;
+            dc_->PushAxisAlignedClip({titleLeft, 0, std::max(titleLeft, clockX - 6), kPillH}, D2D1_ANTIALIAS_MODE_ALIASED);
             if (m.title < 1 && m.titleWas) {
                 float k = Settle(m.title);
                 Phase was = m.titleAsk ? Phase::Approve : m.titleWas->phase;
@@ -377,7 +391,12 @@ public:
                 Title(c, ask, phase, cy, clockX, L.shine ? p.shine : p.text);
             }
             dc_->PopAxisAlignedClip();
-            Text(clock, clockX, cy - 9, clockW + 1, 18, 12.5f, DWRITE_FONT_WEIGHT_NORMAL, p.dim, true);
+            // A card opening from the mark alone has no room for the clock at first: it comes in as the clip clears
+            // the headline's start.
+            float clockIn = std::clamp((clockX - textX) / kClockIn, 0.0f, 1.0f);
+            auto drawClock = [&] { Text(clock, clockX, cy - 9, clockW + 1, 18, 12.5f, DWRITE_FONT_WEIGHT_NORMAL, p.dim, true); };
+            if (clockIn >= 1) drawClock();
+            else if (clockIn > 0) Faded(clockIn, 0, 0, drawClock);
         }
         L.hits.push_back({{kMarkLeft - 3, cy - kMark / 2 - 3, kMarkLeft + kMark + 3, cy + kMark / 2 + 3}, Act::Close});
         L.hits.push_back({{0, top, L.w, top + headerH}, Act::Header});
@@ -480,6 +499,8 @@ public:
     // Every pill as wide as `w` (pill.width = same: an open card's width, so opening one changes only its height; a
     // row's kRowPillW); 0: a pill is as wide as its words (kPillMinW to kCardW).
     void SamePill(float w) { samePill_ = w; }
+    // A folded card as its mark alone, in a circle (pill.width = icon): no words and no clock until it opens.
+    void IconPill(bool on) { iconPill_ = on; }
 
 private:
     ID2D1Factory* d2d_;
@@ -492,6 +513,7 @@ private:
     Pointer ptr_;
     bool ko_ = true;
     float samePill_ = kCardW;
+    bool iconPill_ = false;
     float alpha_ = 1;  // every colour's opacity, for a part fading (Faded)
     // The buttons' row drawn round 보내기 growing into the box (SayMorph): without the button it grows from, each of
     // the others shrunk about its middle by `shrink_`.

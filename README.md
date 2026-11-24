@@ -38,7 +38,7 @@ design follows the run-status card shared by @eliakuratli; colours and type are
 | Answer approvals and questions on the card | on |
 | Show sub-task work | off |
 | Theme | Windows taskbar theme, dark, light |
-| Pill length | same length, fit the words |
+| Pill length | same length, fit the words, icon only |
 
 Answering on the card needs a Bloom with the run-card link (the version after 1.4.3). With an
 older Bloom the cards still show and approvals come as Bloom's cards.
