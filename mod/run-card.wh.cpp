@@ -110,7 +110,6 @@ beside them, and use no tokens. At rest nothing moves or redraws.
 #include <d2d1_1.h>
 #include <d2d1_1helper.h>
 #include <d3d11.h>
-#include <dispatcherqueue.h>
 #include <dwmapi.h>
 #include <dwrite_3.h>
 #include <dxgi1_3.h>
@@ -119,6 +118,17 @@ beside them, and use no tokens. At rest nothing moves or redraws.
 #include <shlobj.h>
 #include <tlhelp32.h>
 #include <windowsx.h>
+
+// CoreMessaging's CreateDispatcherQueueController, declared here: <dispatcherqueue.h> brings in windows.system.h,
+// whose IReference<boolean> and IReference<BYTE> are one type in llvm-mingw's headers and fail to compile.
+enum DISPATCHERQUEUE_THREAD_APARTMENTTYPE { DQTAT_COM_NONE = 0, DQTAT_COM_ASTA = 1, DQTAT_COM_STA = 2 };
+enum DISPATCHERQUEUE_THREAD_TYPE { DQTYPE_THREAD_DEDICATED = 1, DQTYPE_THREAD_CURRENT = 2 };
+struct DispatcherQueueOptions {
+    DWORD dwSize;
+    DISPATCHERQUEUE_THREAD_TYPE threadType;
+    DISPATCHERQUEUE_THREAD_APARTMENTTYPE apartmentType;
+};
+extern "C" HRESULT WINAPI CreateDispatcherQueueController(DispatcherQueueOptions options, void** controller);
 
 #include <algorithm>
 #include <atomic>
@@ -939,8 +949,7 @@ com_ptr<ID2D1Device> CreateDevice(ID2D1Factory1* d2d, com_ptr<ID3D11Device>& d3d
 
 bool App::Start() {
     DispatcherQueueOptions options{sizeof(options), DQTYPE_THREAD_CURRENT, DQTAT_COM_STA};
-    if (FAILED(CreateDispatcherQueueController(options,
-                                               reinterpret_cast<PDISPATCHERQUEUECONTROLLER*>(winrt::put_abi(queue_))))) {
+    if (FAILED(CreateDispatcherQueueController(options, winrt::put_abi(queue_)))) {
         Wh_Log(L"no dispatcher queue");
         return false;
     }
