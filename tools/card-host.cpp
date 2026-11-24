@@ -549,7 +549,7 @@ void LineageChecks(bool ko) {
         const rc::Step* wait = StepOf(c, "thread:t2");
         int subs = 0;
         for (auto& s : c.steps) subs += s.sub;
-        std::wstring says = rc::Tr(ko, L"Codex 하위가 답을 기다리는 중 \x00B7 Lint cleanup", L"Codex subtask waiting for an answer \x00B7 Lint cleanup");
+        std::wstring says = rc::Tr(ko, L"Codex 하위가 답을 기다리는 중 \x00B7 Lint cleanup", L"Codex subtask waiting for answer \x00B7 Lint cleanup");
         Check(wait && wait->asks && subs == 1 && wait->subNo == 3 && wait->running == says,
               "subs off: a Codex sub waiting on an answer keeps its line, numbered; the other sub steps stay hidden");
     }
@@ -1003,10 +1003,10 @@ int wmain(int argc, wchar_t** argv) {
         Check(worst >= 4.5, ("contrast: every word at 4.5:1 or more (lowest " + std::to_string(worst) + ", " + where + ")").c_str());
     }
     rc::Card sent = t3;
-    sent.note = ko ? L"지금 턴에 넣었어요" : L"Added to this turn";
+    sent.note = ko ? L"현재 턴에 전달했습니다" : L"Sent to the current turn";
     rc::Card failed = done;
     failed.canSay = true;
-    failed.note = ko ? L"T3가 꺼져 있어 못 보냈어요" : L"T3 isn't running";
+    failed.note = ko ? L"T3가 꺼져 있어 보내지 못했습니다" : L"Could not send because T3 is not running";
     failed.noteBad = true;
     {
         rc::Laid L = painter.Run(nullptr, typing, nullptr, rc::View::Card, rc::MakePalette(false, accentDark), now, {}, ko);
@@ -1052,7 +1052,7 @@ int wmain(int argc, wchar_t** argv) {
     familyAskOff.canSay = true;
     rc::Card subAsked = family;
     subAsked.composing = true;
-    subAsked.subAsk = rc::Tr(ko, L"하위 · 문서 정리", L"Subtask · 문서 정리");
+    subAsked.subAsk = rc::Tr(ko, L"하위 · 문서 정리", L"subtask · 문서 정리");
     rc::Ask subQ = t3q;
     subQ.from = "child";
     subQ.sub = subAsked.subAsk;
@@ -1068,7 +1068,7 @@ int wmain(int argc, wchar_t** argv) {
         bool pick = false, field = false;
         for (auto& h : L.hits) pick |= h.act == rc::Act::Pick, field |= h.act == rc::Act::Field;
         rc::Laid plain = painter.Run(nullptr, asked, &t3q, rc::View::Card, rc::MakePalette(false, accentDark), now, {}, ko);
-        Check(pick && field && painter.TitleOf(subAsked, &subQ, ko) == rc::Tr(ko, L"하위의 질문", L"A subtask has a question") &&
+        Check(pick && field && painter.TitleOf(subAsked, &subQ, ko) == rc::Tr(ko, L"하위의 질문", L"Question from subtask") &&
                   L.h == plain.h + 22 && rc::Painter::Dotted(subAsked, nullptr),
               "sub question: on the main card with its choices, the line saying whose, the row to answer it");
         // card.subtasks off: the same headline while subs work past the turn, a sub's question on the card as on.
@@ -1079,7 +1079,7 @@ int wmain(int argc, wchar_t** argv) {
         bool offPick = false, offField = false;
         for (auto& h : off.hits) offPick |= h.act == rc::Act::Pick, offField |= h.act == rc::Act::Field;
         Check(painter.TitleOf(familyDoneOff, nullptr, ko) == painter.TitleOf(familyDone, nullptr, ko) &&
-                  painter.TitleOf(subAskedOff, &subQ, ko) == rc::Tr(ko, L"하위의 질문", L"A subtask has a question") && offPick &&
+                  painter.TitleOf(subAskedOff, &subQ, ko) == rc::Tr(ko, L"하위의 질문", L"Question from subtask") && offPick &&
                   offField && off.h == L.h,
               "subs off: the turn over says its subs still work; a sub's question on the main card as with them on");
         std::wstring working = painter.TitleOf(familyOff, nullptr, ko);

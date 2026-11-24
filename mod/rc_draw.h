@@ -508,14 +508,14 @@ private:
         bool ko = ko_;
         if (phase == Phase::Approve && ask) {
             if (!ask->questions.empty() && !ask->sub.empty())
-                return ask->questions.size() == 1 ? Tr(ko, L"하위의 질문", L"A subtask has a question")
+                return ask->questions.size() == 1 ? Tr(ko, L"하위의 질문", L"Question from subtask")
                                                   : Tr(ko, L"하위의 질문 " + Num(ask->questions.size()) + L"개",
-                                                       L"A subtask has " + Num(ask->questions.size()) + L" questions");
+                                                       Num(ask->questions.size()) + L" questions from subtask");
             if (!ask->questions.empty())
-                return ask->questions.size() == 1 ? Tr(ko, L"Claude의 질문", L"Claude has a question")
+                return ask->questions.size() == 1 ? Tr(ko, L"Claude의 질문", L"Question from Claude")
                                                   : Tr(ko, L"Claude의 질문 " + Num(ask->questions.size()) + L"개",
-                                                       L"Claude has " + Num(ask->questions.size()) + L" questions");
-            return Tr(ko, L"승인 요청 · ", L"Needs your approval · ") + ask->tool;
+                                                       Num(ask->questions.size()) + L" Questions from Claude");
+            return Tr(ko, L"승인 요청 · ", L"Approval request · ") + ask->tool;
         }
         // The turn is over but subs it started still work: the card works on (WorkOn), or stays stopped, saying so.
         if (int subs = SubsAtWork(c); c.turnEnd && subs > 0 && phase != Phase::Ask) {
@@ -527,7 +527,7 @@ private:
         if (phase == Phase::Done) {
             // How long it all took: the turn, and its subs' work after it.
             Ms took = std::max(c.turnEnd.value_or(c.turnStart), c.subsEnd) - c.turnStart;
-            std::wstring done = Tr(ko, Duration(true, took, true) + L" 만에 완료", L"Done in " + Duration(false, took, true));
+            std::wstring done = Tr(ko, Duration(true, took, true) + L" 만에 완료", L"Completed in " + Duration(false, took, true));
             if (c.filesChanged > 0)
                 done += Tr(ko, L" · 파일 " + Num(c.filesChanged) + L"개 바뀜",
                            L" · " + Num(c.filesChanged) + (c.filesChanged == 1 ? L" file changed" : L" files changed"));
@@ -906,7 +906,7 @@ private:
         int n = int(c.steps.size());
         if (n == 0) {
             if (dc_)
-                Text(!Over(c) ? Tr(ko_, L"첫 단계를 준비하는 중", L"Getting ready") : Tr(ko_, L"도구를 쓰지 않은 답", L"Answered without tools"),
+                Text(!Over(c) ? Tr(ko_, L"첫 단계를 준비하는 중", L"Preparing first step") : Tr(ko_, L"도구를 쓰지 않은 답", L"Replied without using tools"),
                      kPad + 24, y, w - 2 * kPad - 24, kRowH, 12.5f, DWRITE_FONT_WEIGHT_NORMAL, p.faint);
             return y + kRowH;
         }
@@ -1045,11 +1045,11 @@ private:
         std::wstring words = c.draft;
         std::replace(words.begin(), words.end(), L'\n', L' ');
         if (words.empty())
-            words = choices                ? Tr(ko, L"기타 · 직접 답하기…", L"Other · type your answer…")
-                    : !c.subAsk.empty()    ? Tr(ko, L"하위에 직접 답하기…", L"Type your answer to the subtask…")
-                    : phase == Phase::Ask  ? Tr(ko, L"직접 답하기…", L"Type your answer…")
-                    : phase == Phase::Work ? Tr(ko, L"지금 턴에 끼워 넣기…", L"Add to this turn…")
-                                           : Tr(ko, L"이어서 보내기…", L"Send a follow-up…");
+            words = choices                ? Tr(ko, L"기타 · 직접 답하기…", L"Other · Type an answer…")
+                    : !c.subAsk.empty()    ? Tr(ko, L"하위에 직접 답하기…", L"Reply to subtask…")
+                    : phase == Phase::Ask  ? Tr(ko, L"직접 답하기…", L"Type an answer…")
+                    : phase == Phase::Work ? Tr(ko, L"지금 턴에 끼워 넣기…", L"Steer current turn…")
+                                           : Tr(ko, L"이어서 보내기…", L"Send follow-up…");
         Text(words, L.field.left, y + 5, L.field.right - L.field.left, 18, 12.5f, DWRITE_FONT_WEIGHT_NORMAL,
              c.draft.empty() ? p.faint : p.text);
     }
@@ -1074,7 +1074,7 @@ private:
     // The small line over a question: its header, and that any number may be picked.
     std::wstring QuestionTop(const Question& q) const {
         std::wstring top = q.header;
-        if (q.multi) top += (top.empty() ? L"" : L" · ") + Tr(ko_, L"여러 개 선택", L"Pick any");
+        if (q.multi) top += (top.empty() ? L"" : L" · ") + Tr(ko_, L"여러 개 선택", L"Select multiple");
         return top;
     }
 

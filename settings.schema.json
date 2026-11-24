@@ -5,9 +5,9 @@
       "id": "card",
       "name": {
         "ko": "카드",
-        "en": "Cards",
+        "en": "Card",
         "ja": "カード",
-        "zh": "卡片"
+        "zh": "卡片色"
       },
       "items": [
         {
@@ -20,7 +20,7 @@
               "value": "primary",
               "name": {
                 "ko": "주 모니터",
-                "en": "Main monitor",
+                "en": "Primary monitor",
                 "ja": "メインモニター",
                 "zh": "主显示器"
               }
@@ -29,8 +29,8 @@
               "value": "display1",
               "name": {
                 "ko": "1번",
-                "en": "Display 1",
-                "ja": "ディスプレイ 1",
+                "en": "Monitor 1",
+                "ja": "1番",
                 "zh": "显示器 1"
               }
             },
@@ -38,8 +38,8 @@
               "value": "display2",
               "name": {
                 "ko": "2번",
-                "en": "Display 2",
-                "ja": "ディスプレイ 2",
+                "en": "Monitor 2",
+                "ja": "2番",
                 "zh": "显示器 2"
               }
             },
@@ -47,8 +47,8 @@
               "value": "display3",
               "name": {
                 "ko": "3번",
-                "en": "Display 3",
-                "ja": "ディスプレイ 3",
+                "en": "Monitor 3",
+                "ja": "3番",
                 "zh": "显示器 3"
               }
             },
@@ -56,8 +56,8 @@
               "value": "display4",
               "name": {
                 "ko": "4번",
-                "en": "Display 4",
-                "ja": "ディスプレイ 4",
+                "en": "Monitor 4",
+                "ja": "4番",
                 "zh": "显示器 4"
               }
             }
@@ -70,9 +70,9 @@
           },
           "about": {
             "ko": "카드를 띄울 모니터입니다. 번호는 Windows 설정 › 디스플레이의 번호이고, 연결되지 않은 번호면 주 모니터에 띄웁니다",
-            "en": "The monitor the cards show on. The number is the one in Windows Settings › Display; a number not connected uses the main monitor",
-            "ja": "カードを表示するモニターです。番号は Windows の設定 › ディスプレイの番号で、接続されていない番号ならメインモニターに表示します",
-            "zh": "显示卡片的显示器。编号即 Windows 设置 › 显示 中的编号；未连接的编号则显示在主显示器上"
+            "en": "Monitor to show cards on. Numbers match Windows Settings › Display; if disconnected, the primary monitor is used",
+            "ja": "カードを表示するモニターです。番号は Windows の設定 › ディスプレイに対応し、未接続の場合はメインモニターに表示されます",
+            "zh": "显示卡片的显示器。编号对应 Windows 设置 › 显示；若该编号未连接，则在主显示器上显示"
           }
         },
         {
@@ -443,15 +443,15 @@
           ],
           "name": {
             "ko": "자리",
-            "en": "Place",
+            "en": "Position",
             "ja": "位置",
             "zh": "位置"
           },
           "about": {
             "ko": "카드가 놓이는 곳입니다. 세션이 여럿이면 이 자리에서부터 먼저 온 순서로 쌓이고, 가운데 자리는 위아래로 고르게 퍼집니다",
-            "en": "Where the cards go. With several sessions they stack from here in the order they came; the middle places spread evenly up and down",
-            "ja": "カードを置く場所です。セッションが複数あるとこの位置から来た順に重なり、中央の位置では上下に均等に広がります",
-            "zh": "卡片放置的位置。有多个会话时从此处按出现顺序堆叠；居中位置会上下均匀展开"
+            "en": "Where cards appear. Multiple sessions stack in order of arrival from this position, spreading evenly up and down at center positions",
+            "ja": "カードを配置する場所です。セッションが複数ある場合は到着順にこの位置から積み重なり、中央の位置では上下に均等に広がります",
+            "zh": "卡片显示的位置。有多个会话时按先后顺序从此处堆叠，居中位置则会向上下均匀展开"
           }
         },
         {
@@ -463,24 +463,24 @@
               "value": "stack",
               "name": {
                 "ko": "세로",
-                "en": "Stacked"
+                "en": "Vertical"
               }
             },
             {
               "value": "row",
               "name": {
                 "ko": "가로",
-                "en": "In a row"
+                "en": "Horizontal"
               }
             }
           ],
           "name": {
             "ko": "늘어놓기",
-            "en": "Arrange"
+            "en": "Arrangement"
           },
           "about": {
             "ko": "위·아래 자리에서 카드를 세로로 쌓거나 가로로 한 줄에 놓습니다. 가로면 먼저 온 카드가 모서리에 붙고 다음 카드가 안쪽으로 이어지며, 위·아래 가운데 자리는 가운데에서 양쪽으로 번갈아 늘어납니다. 줄이 화면 너비를 넘으면 오래된 카드부터 알약으로 접힙니다. 가운데 왼쪽·오른쪽 자리는 세로뿐입니다",
-            "en": "At the top and bottom places the cards stack or go in one row. In a row the first card sits at the corner and the next ones follow inwards; at the top and bottom centre they spread from the middle to both sides in turn. A row wider than the screen folds its oldest cards into pills first. The middle left and right places always stack"
+            "en": "Stack cards vertically or arrange them in a horizontal row at top and bottom positions. Horizontally, earlier cards anchor to the corner and newer ones extend inward, or alternate outward from top/bottom center. If the row exceeds screen width, older cards collapse into pills first. Middle left and right positions only stack vertically"
           }
         },
         {
@@ -491,13 +491,13 @@
           "max": 200,
           "name": {
             "ko": "가장자리 여백",
-            "en": "Margin",
-            "ja": "端の余白",
-            "zh": "边距"
+            "en": "Edge margin",
+            "ja": "画面端の余白",
+            "zh": "边缘间距"
           },
           "about": {
             "ko": "화면 가장자리와 카드 사이의 거리입니다",
-            "en": "The distance between the screen's edge and the cards",
+            "en": "Distance between the screen edge and the cards",
             "ja": "画面の端とカードの間の距離です",
             "zh": "屏幕边缘与卡片之间的距离"
           }
@@ -556,7 +556,7 @@
           },
           "about": {
             "ko": "카드의 크기입니다. 글자와 단추가 함께 커지고, 가장자리 여백은 그대로입니다",
-            "en": "The cards' size. Text and buttons grow with it; the margin stays as it is"
+            "en": "Size of the cards. Text and buttons scale together while the edge margin stays the same"
           }
         },
         {
@@ -568,9 +568,9 @@
               "value": "hover",
               "name": {
                 "ko": "포인터를 올리면",
-                "en": "When pointed at",
-                "ja": "ポインターを置いたとき",
-                "zh": "指针悬停时"
+                "en": "On hover",
+                "ja": "ホバー時",
+                "zh": "悬停时"
               },
               "easy": {
                 "picture": {
@@ -638,8 +638,8 @@
               "value": "always",
               "name": {
                 "ko": "늘 펼침",
-                "en": "Always open",
-                "ja": "常に開く",
+                "en": "Always expanded",
+                "ja": "常に展開",
                 "zh": "始终展开"
               },
               "easy": {
@@ -761,15 +761,15 @@
           ],
           "name": {
             "ko": "펼치기",
-            "en": "Open",
-            "ja": "開く",
-            "zh": "展开"
+            "en": "Expand",
+            "ja": "展開",
+            "zh": "展开方式"
           },
           "about": {
             "ko": "평소에는 한 줄 알약이고 포인터를 올리면 카드로 펼칩니다. 승인·질문을 기다릴 때와 끝났을 때는 저절로 펼칩니다",
-            "en": "At rest a card is a one-line pill that opens when pointed at. It opens by itself while it waits for an approval or an answer, and when the turn is done",
-            "ja": "普段は一行のピルで、ポインターを置くとカードに開きます。承認や回答を待つときと終わったときは自動で開きます",
-            "zh": "平时是一行胶囊，指针悬停时展开为卡片。等待批准或回答时以及完成时会自动展开"
+            "en": "Shows as a single-line pill by default and expands into a card on hover. Automatically expands when waiting for approvals or questions, and when finished",
+            "ja": "通常は1行のピルとして表示され、ポインターを合わせるとカードに展開します。承認や質問の待機中、および完了時は自動的に展開します",
+            "zh": "平时显示为单行胶囊，鼠标悬停时展开为卡片。等待批准或提问以及完成时会自动展开"
           }
         },
         {
@@ -780,15 +780,15 @@
           "max": 600,
           "name": {
             "ko": "완료 카드 남기기 (초)",
-            "en": "Keep a finished card (s)",
-            "ja": "完了カードを残す (秒)",
+            "en": "Keep completed cards (sec)",
+            "ja": "完了カードの表示時間 (秒)",
             "zh": "保留完成卡片 (秒)"
           },
           "about": {
             "ko": "턴이 끝난 뒤 카드가 이만큼 남았다가 사라집니다. 포인터를 올리고 있으면 기다리고, 오른쪽 클릭하면 바로 닫힙니다",
-            "en": "How long a card stays after its turn ends. It waits while pointed at; a right click closes it at once",
-            "ja": "ターンが終わった後、カードがこの時間だけ残ってから消えます。ポインターを置いている間は待ち、右クリックですぐ閉じます",
-            "zh": "回合结束后卡片保留这么久再消失。指针悬停时会等待，右键单击可立即关闭"
+            "en": "How long a card stays visible after a turn ends before disappearing. Hovering pauses the timer, and right-clicking dismisses it immediately",
+            "ja": "ターン終了後、カードがこの時間だけ残ってから消えます。ポインターを合わせている間は待機し、右クリックするとすぐに閉じます",
+            "zh": "轮次结束后卡片保留显示的时间。鼠标悬停时暂停倒计时，右键点击可立即关闭"
           }
         },
         {
@@ -797,15 +797,15 @@
           "default": true,
           "name": {
             "ko": "카드에서 승인·질문 답하기",
-            "en": "Answer approvals and questions on the card",
-            "ja": "カードで承認・質問に答える",
-            "zh": "在卡片上回答批准和问题"
+            "en": "Answer approvals and questions on cards",
+            "ja": "カードで承認・質問に応答",
+            "zh": "在卡片中回复批准与提问"
           },
           "about": {
             "ko": "Bloom 설정 › 알림의 '알림 카드에서 승인'이 받은 Claude Code의 권한 요청과 질문을 이 카드에서 허용·거절하거나 답합니다. 끄면 Bloom 알림 카드가 받습니다",
-            "en": "Claude Code's permission requests and questions that Bloom's 'Approve on notice cards' (Settings › Notices) receives are allowed, denied or answered on this card. Off, Bloom's notice cards take them",
-            "ja": "Bloom の設定 › 通知の「通知カードで承認」が受け取った Claude Code の権限リクエストと質問を、このカードで許可・拒否したり答えたりします。オフにすると Bloom の通知カードが受け取ります",
-            "zh": "Bloom 设置 › 通知 中“在通知卡片上批准”收到的 Claude Code 权限请求和问题，在此卡片上允许、拒绝或回答。关闭后由 Bloom 的通知卡片处理"
+            "en": "Handle Claude Code permission requests and questions received via 'Approve from notification card' in Bloom Settings › Notifications directly on this card. When off, Bloom notification cards handle them",
+            "ja": "Bloom 設定 › 通知の '通知カードで承認' が受け取った Claude Code の権限リクエストや質問に対し、このカードで許可・拒否や回答を行います。オフにすると Bloom の通知カードが受け取ります",
+            "zh": "在此卡片中允许、拒绝或回答由 Bloom 设置 › 通知中的 '在通知卡片中批准' 接收到的 Claude Code 权限请求与提问。关闭后由 Bloom 通知卡片处理"
           }
         },
         {
@@ -814,11 +814,11 @@
           "default": false,
           "name": {
             "ko": "하위 작업 보기",
-            "en": "Show sub-task work"
+            "en": "Show subtasks"
           },
           "about": {
             "ko": "켜면 하위 에이전트와 하위 세션의 단계도 메인 카드에 보입니다. 끄면 메인 세션의 단계만 보입니다. 하위의 질문과 승인은 어느 쪽이든 메인 카드에 나옵니다",
-            "en": "On, the steps of sub-agents and sub-sessions show on the main card. Off, only the main session's steps do. Questions and approvals from subs show on the main card either way"
+            "en": "When enabled, steps from subagents and child sessions also appear on the main card. When disabled, only main session steps are shown. Subtask questions and approvals always appear on the main card"
           }
         }
       ]
@@ -827,7 +827,7 @@
       "id": "pill",
       "name": {
         "ko": "모양",
-        "en": "Look",
+        "en": "Appearance",
         "ja": "外観",
         "zh": "外观"
       },
@@ -873,9 +873,9 @@
           },
           "about": {
             "ko": "카드의 라이트·다크입니다. Bloom 애드온으로 쓰면 Bloom의 테마를 따릅니다",
-            "en": "Light or dark for the cards. As a Bloom add-on they follow Bloom's theme",
-            "ja": "カードのライト・ダークです。Bloom のアドオンとして使うと Bloom のテーマに従います",
-            "zh": "卡片的浅色或深色。作为 Bloom 加载项使用时跟随 Bloom 的主题"
+            "en": "Light or dark theme for cards. When used as a Bloom add-on, it follows Bloom's theme",
+            "ja": "カードのライト・ダークテーマです。Bloom アドオンとして使用する場合は Bloom のテーマに従います",
+            "zh": "卡片的浅色或深色主题。作为 Bloom 插件使用时将跟随 Bloom 的主题"
           }
         },
         {
@@ -887,24 +887,24 @@
               "value": "same",
               "name": {
                 "ko": "같은 길이",
-                "en": "Same length"
+                "en": "Fixed width"
               }
             },
             {
               "value": "fit",
               "name": {
                 "ko": "내용에 맞춤",
-                "en": "Fit the words"
+                "en": "Fit to content"
               }
             }
           ],
           "name": {
             "ko": "알약 길이",
-            "en": "Pill length"
+            "en": "Pill width"
           },
           "about": {
             "ko": "접힌 카드(알약)의 길이입니다. 같은 길이면 모든 알약이 펼친 카드와 같은 너비라 펼쳐도 높이만 바뀌고, 넘치는 글은 줄임표로 줄입니다. 가로로 늘어놓으면 알약은 그보다 짧은 같은 길이라서, 접으면 줄이 줄어듭니다. 내용에 맞춤이면 글에 따라 짧아지거나 길어집니다",
-            "en": "The length of a folded card (a pill). With the same length every pill is as wide as an open card, so opening one changes only its height, and words too long end in an ellipsis. In a row the pills share a shorter length, so folding a card narrows the row. Fit the words makes a pill shorter or longer with its words"
+            "en": "Width of collapsed cards (pills). Fixed width matches the expanded card width so only the height changes on expand, truncating long text with an ellipsis (in horizontal rows, pills use a shorter uniform width so collapsing shrinks the row). Fit content adjusts the width to the text"
           }
         }
       ]

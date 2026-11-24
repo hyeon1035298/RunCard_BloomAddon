@@ -1236,7 +1236,7 @@ std::wstring App::SubWho(const std::string& session) const {
         if (f.snap && title.empty())
             for (const si::SessionView& v : f.snap->sessions)
                 if (v.id == session) title = v.title.empty() ? v.project : v.title;
-    return rc::Tr(g_korean, L"하위", L"Subtask") + (title.empty() ? L"" : L" \x00B7 " + title);
+    return rc::Tr(g_korean, L"하위", L"subtask") + (title.empty() ? L"" : L" \x00B7 " + title);
 }
 
 void App::Update() {
@@ -2379,8 +2379,8 @@ void App::NotStopped(Slot& s, const std::wstring& why) {
     s.stopAt = 0;
     s.noteAt = Tick();
     s.noteBad = true;
-    s.note = why == L"t3-off" ? rc::Tr(ko, L"T3가 꺼져 있어 못 멈췄어요", L"T3 isn't running")
-                              : rc::Tr(ko, L"멈추지 못했어요", L"Couldn't stop");
+    s.note = why == L"t3-off" ? rc::Tr(ko, L"T3가 꺼져 있어 중단하지 못했습니다", L"Could not stop because T3 is not running")
+                              : rc::Tr(ko, L"중단하지 못했습니다", L"Could not stop");
 }
 
 // ---- 보내기 ---------------------------------------------------------------------------------------------------
@@ -2578,16 +2578,16 @@ void App::Said(Slot& s, bool ok, const std::wstring& word) {
     s.noteAt = Tick();
     s.noteBad = !ok;
     if (ok)
-        s.note = word == L"answered" ? rc::Tr(ko, L"질문에 답했어요", L"Answered")
-                 : word == L"steered" ? rc::Tr(ko, L"지금 턴에 넣었어요", L"Added to this turn")
-                 : word == L"started" ? rc::Tr(ko, L"보냈어요", L"Sent")
-                                      : rc::Tr(ko, L"다음 턴으로 보냈어요", L"Sent for the next turn");
+        s.note = word == L"answered" ? rc::Tr(ko, L"질문에 답변했습니다", L"Answered the question")
+                 : word == L"steered" ? rc::Tr(ko, L"현재 턴에 전달했습니다", L"Sent to the current turn")
+                 : word == L"started" ? rc::Tr(ko, L"보냈습니다", L"Sent")
+                                      : rc::Tr(ko, L"다음 턴으로 보냈습니다", L"Queued for the next turn");
     else
-        s.note = word == L"t3-off"      ? rc::Tr(ko, L"T3가 꺼져 있어 못 보냈어요", L"T3 isn't running")
-                 : word == L"no-thread" ? rc::Tr(ko, L"T3에서 이 세션을 못 찾았어요", L"T3 has no thread for this session")
-                 : word == L"bloom"     ? rc::Tr(ko, L"Bloom에 닿지 않아 못 보냈어요", L"Bloom isn't connected")
-                 : word == L"no-question" ? rc::Tr(ko, L"질문이 이미 끝났어요", L"The question is over")
-                                        : rc::Tr(ko, L"보내지 못했어요", L"Couldn't send");
+        s.note = word == L"t3-off"      ? rc::Tr(ko, L"T3가 꺼져 있어 보내지 못했습니다", L"Could not send because T3 is not running")
+                 : word == L"no-thread" ? rc::Tr(ko, L"T3에서 이 세션을 찾을 수 없습니다", L"Could not find this session in T3")
+                 : word == L"bloom"     ? rc::Tr(ko, L"Bloom에 연결되지 않아 보내지 못했습니다", L"Could not send because Bloom is unreachable")
+                 : word == L"no-question" ? rc::Tr(ko, L"이미 종료된 질문입니다", L"This question has already ended")
+                                        : rc::Tr(ko, L"보내지 못했어요", L"Failed to send");
     if (!ok && Blank(s.draft)) {
         // Back in the box for the session they were for; for a question over, for whatever the row answers next.
         s.draft = s.sent;

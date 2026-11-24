@@ -173,7 +173,7 @@ inline std::wstring Duration(bool ko, Ms ms, bool running) {
     long long m = s / 60;
     s %= 60;
     if (m < 60) return ko ? Num(m) + L"분 " + Num(s) + L"초" : Num(m) + L"m " + Num(s) + L"s";
-    return ko ? Num(m / 60) + L"시간 " + Num(m % 60) + L"분" : Num(m / 60) + L"h " + Num(m % 60) + L"m";
+    return ko ? Num(m / 60) + L"시간 " + Num(m % 60) + L"분" : Num(m / 60) + L" hr " + Num(m % 60) + L" min";
 }
 
 // The turn's clock in the header: "0:13", "12:04", "1:02:09".
@@ -253,7 +253,7 @@ inline Step Words(const Run& r, bool ko) {
             break;
         case Icon::Search:
             s.done = r.calls > 1 ? Tr(ko, L"검색 " + count + L"번", L"Searched " + count + L" times")
-                                 : Tr(ko, L"검색", L"Searched");
+                                 : Tr(ko, L"검색", L"Search");
             s.running = Tr(ko, L"검색하는 중", L"Searching");
             break;
         case Icon::Edit:
@@ -268,20 +268,20 @@ inline Step Words(const Run& r, bool ko) {
         case Icon::Shell:
             if (r.calls > 1) {
                 s.done = Tr(ko, L"명령 " + count + L"개 실행함", L"Ran " + count + L" commands");
-                s.running = Tr(ko, L"명령 실행 중 · ", L"Running · ") + one;
+                s.running = Tr(ko, L"명령 실행 중 · ", L"Running command · ") + one;
             } else {
-                s.done = one.empty() ? Tr(ko, L"명령 실행함", L"Ran a command") : one;
-                s.running = Tr(ko, L"명령 실행 중", L"Running") + (one.empty() ? L"" : L" · " + one);
+                s.done = one.empty() ? Tr(ko, L"명령 실행함", L"Ran command") : one;
+                s.running = Tr(ko, L"명령 실행 중", L"Running command") + (one.empty() ? L"" : L" · " + one);
             }
             break;
         case Icon::Web:
             if (r.tool == "WebSearch") {
                 s.done = r.calls > 1 ? Tr(ko, L"웹 검색 " + count + L"번", L"Searched the web " + count + L" times")
-                                     : Tr(ko, L"웹 검색", L"Searched the web");
+                                     : Tr(ko, L"웹 검색", L"Web Search");
                 s.running = Tr(ko, L"웹 검색하는 중", L"Searching the web");
             } else if (n > 1) {
-                s.done = Tr(ko, L"웹 페이지 " + Num(n) + L"개 읽음", L"Read " + Num(n) + L" pages");
-                s.running = Tr(ko, L"웹 페이지 읽는 중", L"Reading pages");
+                s.done = Tr(ko, L"웹 페이지 " + Num(n) + L"개 읽음", L"Read " + Num(n) + L" web pages");
+                s.running = Tr(ko, L"웹 페이지 읽는 중", L"Reading web page");
             } else {
                 s.done = Tr(ko, one + L" 읽음", L"Read " + one);
                 s.running = Tr(ko, one + L" 읽는 중", L"Reading " + one);
@@ -289,8 +289,8 @@ inline Step Words(const Run& r, bool ko) {
             break;
         case Icon::Agent:
             if (r.calls > 1) {
-                s.done = Tr(ko, L"에이전트 " + count + L"개", L"Ran " + count + L" agents");
-                s.running = Tr(ko, L"에이전트 " + count + L"개 일하는 중", L"Running " + count + L" agents");
+                s.done = Tr(ko, L"에이전트 " + count + L"개", count + L" agents");
+                s.running = Tr(ko, L"에이전트 " + count + L"개 일하는 중", count + L" agents working");
             } else {
                 s.done = Tr(ko, L"에이전트 · ", L"Agent · ") + one;
                 s.running = Tr(ko, L"에이전트 일하는 중 · ", L"Agent working · ") + one;
@@ -298,26 +298,26 @@ inline Step Words(const Run& r, bool ko) {
             break;
         case Icon::Skill:
             s.done = Tr(ko, L"스킬 · ", L"Skill · ") + one;
-            s.running = Tr(ko, L"스킬 읽는 중 · ", L"Loading skill · ") + one;
+            s.running = Tr(ko, L"스킬 읽는 중 · ", L"Reading skill · ") + one;
             break;
         case Icon::Question:
-            s.done = Tr(ko, L"질문에 답함", L"Answered a question");
-            s.running = Tr(ko, L"답을 기다리는 중", L"Waiting for your answer");
+            s.done = Tr(ko, L"질문에 답함", L"Answered question");
+            s.running = Tr(ko, L"답을 기다리는 중", L"Waiting for reply");
             break;
         case Icon::Plan:
             s.done = r.tool == "EnterPlanMode" ? Tr(ko, L"계획 세우기 시작", L"Started planning")
-                                               : Tr(ko, L"계획 승인함", L"Plan approved");
+                                               : Tr(ko, L"계획 승인함", L"Approved plan");
             s.running = r.tool == "EnterPlanMode" ? Tr(ko, L"계획 세우는 중", L"Planning")
                                                   : Tr(ko, L"계획 승인을 기다리는 중", L"Waiting for plan approval");
             break;
         case Icon::Todo:
-            s.done = Tr(ko, L"할 일 정리", L"Updated the to-do list");
-            s.running = Tr(ko, L"할 일 정리하는 중", L"Updating the to-do list");
+            s.done = Tr(ko, L"할 일 정리", L"Updated to-dos");
+            s.running = Tr(ko, L"할 일 정리하는 중", L"Updating to-dos");
             break;
         case Icon::Mcp: {
             std::wstring name = McpName(r.tool);
             s.done = r.calls > 1 ? name + L" ×" + count : name;
-            s.running = name + Tr(ko, L" 쓰는 중", L" running");
+            s.running = name + Tr(ko, L" 쓰는 중", L" in use");
             break;
         }
         default: {
@@ -625,7 +625,7 @@ inline std::vector<Child> ChildrenOf(const std::string& main, const std::map<std
 inline std::wstring SubName(const Child& ch, bool ko, bool waiting = false) {
     std::wstring who = ch.company == "claude" ? L"Claude" : ch.company == "codex" ? L"Codex" : ch.company == "gemini" ? L"Gemini"
                                                                                   : Tr(ko, L"다른 AI", L"Other AI");
-    std::wstring sub = waiting ? Tr(ko, L" 하위가 답을 기다리는 중", L" subtask waiting for an answer") : Tr(ko, L" 하위", L" subtask");
+    std::wstring sub = waiting ? Tr(ko, L" 하위가 답을 기다리는 중", L" subtask waiting for answer") : Tr(ko, L" 하위", L" subtask");
     return who + sub + (ch.title.empty() ? L"" : L" \x00B7 " + ch.title);
 }
 
