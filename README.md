@@ -1,4 +1,4 @@
-# Run Card (Bloom add-on)
+# Task Cards (Bloom add-on)
 
 While Claude Code sessions work, a small pill shows for each one on a side of the screen with what
 it is doing and how long it has taken. Point at a pill and it opens where it is into a card: the

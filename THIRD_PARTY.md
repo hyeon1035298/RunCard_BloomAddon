@@ -1,4 +1,4 @@
-# Run card add-on: sources and licenses
+# Task Cards add-on: sources and licenses
 
 The add-on as a whole (this repository and its release zip) is distributed under the
 GNU General Public License, version 3 only (`LICENSE`). It combines the parts below.

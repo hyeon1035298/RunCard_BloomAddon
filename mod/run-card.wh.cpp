@@ -1,8 +1,8 @@
 // ==WindhawkMod==
 // @id              run-card
-// @name            Run Card
+// @name            Task Cards
 // @description     A live card for each running Claude Code session: what it does now, its steps, and its questions to answer
-// @version         0.1.0
+// @version         0.1.1
 // @author          Hyeon
 // @include         explorer.exe
 // @architecture    x86-64
