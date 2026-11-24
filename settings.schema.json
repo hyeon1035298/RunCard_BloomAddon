@@ -7,7 +7,7 @@
         "ko": "카드",
         "en": "Card",
         "ja": "カード",
-        "zh": "卡片色"
+        "zh": "卡片"
       },
       "items": [
         {
@@ -786,7 +786,7 @@
           },
           "about": {
             "ko": "턴이 끝난 뒤 카드가 이만큼 남았다가 사라집니다. 포인터를 올리고 있으면 기다리고, 오른쪽 클릭하면 바로 닫힙니다",
-            "en": "How long a card stays visible after a turn ends before disappearing. Hovering pauses the timer, and right-clicking dismisses it immediately",
+            "en": "How long a card stays after a turn ends. Hovering pauses the timer, and a right-click dismisses it",
             "ja": "ターン終了後、カードがこの時間だけ残ってから消えます。ポインターを合わせている間は待機し、右クリックするとすぐに閉じます",
             "zh": "轮次结束后卡片保留显示的时间。鼠标悬停时暂停倒计时，右键点击可立即关闭"
           }

@@ -514,7 +514,7 @@ private:
             if (!ask->questions.empty())
                 return ask->questions.size() == 1 ? Tr(ko, L"Claude의 질문", L"Question from Claude")
                                                   : Tr(ko, L"Claude의 질문 " + Num(ask->questions.size()) + L"개",
-                                                       Num(ask->questions.size()) + L" Questions from Claude");
+                                                       Num(ask->questions.size()) + L" questions from Claude");
             return Tr(ko, L"승인 요청 · ", L"Approval request · ") + ask->tool;
         }
         // The turn is over but subs it started still work: the card works on (WorkOn), or stays stopped, saying so.
