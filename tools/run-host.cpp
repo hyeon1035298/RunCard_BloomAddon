@@ -402,7 +402,8 @@ void IslandGone() {
 void IslandMake() {
     static bool registered = false;
     if (!registered) {
-        WNDCLASSEXW wc{sizeof(wc)};
+        WNDCLASSEXW wc{};
+        wc.cbSize = sizeof(wc);
         wc.lpfnWndProc = DefWindowProcW;
         wc.hInstance = GetModuleHandleW(nullptr);
         wc.hbrBackground = static_cast<HBRUSH>(GetStockObject(BLACK_BRUSH));

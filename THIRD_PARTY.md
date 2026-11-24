@@ -81,4 +81,4 @@ Microsoft is included in this repository or in the release zip.
 
 The add-on asks Windows for Segoe UI and Malgun Gothic, Cascadia Mono (Consolas without it),
 and for the glyphs of Segoe Fluent Icons (Segoe MDL2 Assets on older systems). No font is
-included. The mark on a card is a plain eight-ray spark drawn in code, not a company's logo.
+included. The mark on a card is not a font glyph: see "Claude's mark" above.
