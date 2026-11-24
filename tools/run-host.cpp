@@ -5,7 +5,10 @@
 // on this thread), with the cards on the monitor above the main one (else another, else the main one). It also
 // stands in for Bloom on a pipe of its own (RUN_CARD_PIPE), printing what the cards send and sending requests.
 //
-//   run-host.exe <runtime dll> <mod dll> <data folder> [--root <projects>] [--values <json>] [step ...]
+//   run-host.exe <runtime dll> <mod dll> <data folder> [--root <projects>] [--values <json>] [--t3 <n>] [step ...]
+//   --t3 <n>: the stand-in Bloom answers as for T3 sessions: every session takes words and a stop (`can`), and the
+//   question a session waits on comes with its choices (`question`: two questions, the first with long notes) once
+//   it has been asked for <n> times with none
 // steps:
 //   wait <ms>            pump messages for a while
 //   values <json>        write values.json (as Bloom does); "$log": true and the monitor are added
@@ -203,6 +206,40 @@ std::atomic<HANDLE> g_pipe{nullptr};
 std::mutex g_write;
 std::vector<std::string> g_heard;
 std::mutex g_heardLock;
+int g_t3 = -1;  // --t3: the `question` answers still to come without choices (-1: no T3 answers)
+
+void ToCards(const std::string& line);
+
+// What Bloom answers a card's line about a T3 session (--t3): `can`, and `question` with a long question's choices.
+void AnswerAsT3(const std::string& line) {
+    const std::string key = "\"session\":\"";
+    size_t at = line.find(key);
+    if (g_t3 < 0 || at == std::string::npos) return;
+    at += key.size();
+    std::string session = line.substr(at, line.find('"', at) - at);
+    if (line.find("\"t\":\"can\"") != std::string::npos) {
+        ToCards("{\"t\":\"can\",\"session\":\"" + session + "\",\"say\":true,\"stop\":true}");
+    } else if (line.find("\"t\":\"question\"") != std::string::npos) {
+        if (g_t3 > 0) {
+            g_t3--;
+            ToCards("{\"t\":\"question\",\"session\":\"" + session + "\",\"questions\":[]}");
+            return;
+        }
+        ToCards("{\"t\":\"question\",\"session\":\"" + session +
+                "\",\"questions\":["
+                "{\"header\":\"환불\",\"text\":\"이미 나간 청구서의 차액은 어떻게 돌려줄까요? 지난달 청구서 가운데 반올림이 "
+                "달라지는 것이 40건쯤 있고, 금액은 건마다 1센트입니다.\",\"multi\":false,\"choices\":["
+                "{\"label\":\"다음 청구서에서 빼기 (추천)\",\"description\":\"다음 달 청구서에 차액만큼 빼는 줄을 한 줄 넣습니다. "
+                "고객이 따로 할 일이 없고, 회계 쪽에서는 월말 대사에 그 줄이 그대로 보입니다. 해지한 고객에게는 다음 청구서가 "
+                "없어서 따로 환불해야 합니다.\"},"
+                "{\"label\":\"바로 환불하기\",\"description\":\"결제 수단으로 차액을 바로 돌려보냅니다. 1센트짜리 환불이 40건쯤 "
+                "나가고, 건마다 결제 대행사의 환불 기록과 고객에게 가는 알림 메일이 하나씩 생깁니다. 카드사에 따라 명세서에 "
+                "찍히기까지 며칠이 걸리고, 그동안 문의가 올 수 있습니다. 환불 수수료는 없지만 대행사 화면에서 건별로 확인해야 "
+                "하며, 실패한 환불은 다음 날 다시 시도하고, 세 번 실패하면 담당자에게 알림이 갑니다.\"}]},"
+                "{\"header\":\"통화\",\"text\":\"어느 통화부터 적용할까요?\",\"multi\":false,\"choices\":["
+                "{\"label\":\"원화\",\"description\":\"\"},{\"label\":\"달러\",\"description\":\"\"}]}]}");
+    }
+}
 
 // Overlapped: the reading thread and ToCards use the one handle at once.
 bool Wait(HANDLE pipe, OVERLAPPED& ov, BOOL started, DWORD& got) {
@@ -237,8 +274,11 @@ DWORD WINAPI Bloom(void*) {
                 pending.erase(0, nl + 1);
                 printf("card> %s\n", line.c_str());
                 fflush(stdout);
-                std::lock_guard<std::mutex> hold(g_heardLock);
-                g_heard.push_back(line);
+                {
+                    std::lock_guard<std::mutex> hold(g_heardLock);
+                    g_heard.push_back(line);
+                }
+                AnswerAsT3(line);
             }
         }
         {
@@ -505,6 +545,7 @@ int wmain(int argc, wchar_t** argv) {
         std::wstring k = argv[i];
         if (k == L"--root") SetEnvironmentVariableW(L"RUN_CARD_ROOT", argv[i + 1]);
         else if (k == L"--values") g_values = Narrow(argv[i + 1]);
+        else if (k == L"--t3") g_t3 = _wtoi(argv[i + 1]);
     }
     SetEnvironmentVariableW(L"RUN_CARD_TEST", L"1");
     std::wstring pipe = L"RunCardTest." + std::to_wstring(GetCurrentProcessId());

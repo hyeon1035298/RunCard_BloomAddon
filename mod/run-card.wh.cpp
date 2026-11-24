@@ -681,6 +681,9 @@ constexpr int kMaxCards = 6;
 // A session Bloom said takes no words is asked again this long after its card came (T3 Code may not have written the
 // thread yet when first asked), then no more until its next turn: each ask is a read of T3 Code's state.
 constexpr double kCanAgainMs[] = {2000, 10000};
+// A T3 session's question Bloom had no choices for is asked for again this long after the first ask: T3 Code may put
+// the question up a moment after the transcript says the session waits.
+constexpr double kQuestionAgainMs[] = {1500, 5000, 15000};
 constexpr int kRescanTicks = 300;  // the Claude folders are looked for again every five minutes
 // Bloom's `kin` (a session's parent and sub-sessions in T3 Code): asked when a card comes and this often while it is
 // there; a new card waits this long for the answer (a sub-session's gets none of its own), once Bloom answers `kin`.
@@ -765,6 +768,8 @@ private:
         bool composing = false;  // its row is the box to type in
         bool askOpened = false;  // the row was opened for the question the session waits on (once a question)
         std::string askFor;      // ... the session asking: the card's own, or a sub-session of it (the answer goes there)
+        double askAt = 0;        // ... when Bloom was first asked for its choices
+        int askAgain = 0;        // ... asked again since, while none came (kQuestionAgainMs)
         double kidsAt = 0;       // when a sub-session of it was last seen at work (Now: the card stays doneSeconds past it)
         std::wstring draft;      // the words typed, while the edit box is elsewhere
         std::string draftFor;    // ... the session the row answered when they were begun (empty: no words); they go there
@@ -1416,7 +1421,13 @@ void App::Update() {
         if (inRow && (!s->askOpened || s->askFor != asker)) {
             s->askOpened = true;
             s->askFor = asker;
+            s->askAt = tick;
+            s->askAgain = 0;
             s->composing = true;
+            link_.Send(rc::SessionLine("question", asker));
+        } else if (inRow && !ask && link_.Up() && s->askAgain < int(std::size(kQuestionAgainMs)) &&
+                   tick - s->askAt >= kQuestionAgainMs[s->askAgain]) {
+            s->askAgain++;
             link_.Send(rc::SessionLine("question", asker));
         } else if (!inRow && s->askOpened) {
             s->askOpened = false;
@@ -2112,8 +2123,9 @@ void App::OnLink(WPARAM what, std::string* line) {
             asks_[card] = std::move(a);
             Update();
         } else if (t == L"question") {
-            // A T3 session's question with its choices, when it still waits on it and the card shows it whole: on its
-            // own card, or a sub-session's on the card of the session it works for.
+            // A T3 session's question with its choices, when it still waits on it: on its own card, or a sub-session's
+            // on the card of the session it works for. No other card shows it, so one too tall for the room takes
+            // fewer lines (rc::kRowLines), its longer texts ending in an ellipsis.
             std::string session = winrt::to_string(o.GetNamedString(L"session", L""));
             Slot* s = Find(CardFor(session));
             if (!s || !s->askOpened || s->askFor != session || asks_.count(s->id)) return;
@@ -2127,9 +2139,10 @@ void App::OnLink(WPARAM what, std::string* line) {
                 a.sub = SubWho(session);
             }
             questions(a);
-            if (a.questions.empty() || !painter_->Fits(a, g_korean) ||
-                painter_->AskH(s->card, a, look_, rc::Ms(Now()), g_korean) > rc::Room(room_, Margin()))
-                return;
+            if (a.questions.empty()) return;
+            auto tall = [&] { return painter_->AskH(s->card, a, look_, rc::Ms(Now()), g_korean) > rc::Room(room_, Margin()); };
+            while (tall() && a.tight + 1 < int(std::size(rc::kRowLines))) a.tight++;
+            if (tall()) return;
             asks_[s->id] = std::move(a);
             Update();
         } else if (t == L"kin") {

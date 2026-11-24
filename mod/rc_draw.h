@@ -97,7 +97,6 @@ constexpr int kRows = 5;          // steps shown
 constexpr int kSegments = 10;     // the bar's most segments
 constexpr float kBtnH = 28;
 constexpr int kRequestLines = 14;  // a permission request's lines on the card; a longer one goes to Bloom's card
-constexpr int kQuestionLines = 3, kLabelLines = 2, kAboutLines = 3;  // the same for a question and its choices
 constexpr float kRingR = 10.5f, kRingW = 1.6f;  // the spinning ring round the mark
 // Claude's mark (the spark Claude's apps show; a trademark of Anthropic, see THIRD_PARTY.md), its path in a 24 × 24 box
 // as Simple Icons draws it.
@@ -282,7 +281,7 @@ public:
 
     // Whether the card can show Bloom's request whole: every line of a permission request, every question and
     // choice in full. One that can't goes back to Bloom (`none`), whose own card shows it: nothing the user allows or
-    // picks stays out of sight.
+    // picks stays out of sight. (A T3 session's question is not asked this: Ask::Lines.)
     bool Fits(const Ask& a, bool ko) {
         ko_ = ko;
         float tw = kCardW - 2 * kPad;
@@ -290,11 +289,11 @@ public:
             return Lines(a.body, RequestW(kCardW), kRequestSize, DWRITE_FONT_WEIGHT_NORMAL, mono_) <= kRequestLines;
         float pager = a.questions.size() > 1 ? PagerW(a, int(a.questions.size()) - 1) + kPagerGap : 0;
         for (const Question& q : a.questions) {
-            if (Lines(q.text, tw, 12.5f, DWRITE_FONT_WEIGHT_SEMI_BOLD) > kQuestionLines) return false;
+            if (Lines(q.text, tw, 12.5f, DWRITE_FONT_WEIGHT_SEMI_BOLD) > kWholeLines.question) return false;
             if (TextW(QuestionTop(q), 11, DWRITE_FONT_WEIGHT_SEMI_BOLD) > tw - pager) return false;
             for (const Choice& ch : q.choices) {
-                if (Lines(ch.label, tw - 20, 12.5f, DWRITE_FONT_WEIGHT_NORMAL) > kLabelLines) return false;
-                if (Lines(ch.description, tw - 20, 11, DWRITE_FONT_WEIGHT_NORMAL) > kAboutLines) return false;
+                if (Lines(ch.label, tw - 20, 12.5f, DWRITE_FONT_WEIGHT_NORMAL) > kWholeLines.label) return false;
+                if (Lines(ch.description, tw - 20, 11, DWRITE_FONT_WEIGHT_NORMAL) > kWholeLines.about) return false;
             }
         }
         return true;
@@ -709,14 +708,18 @@ private:
         dc_->DrawTextLayout({x, y}, l.Get(), brush_.Get(), D2D1_DRAW_TEXT_OPTIONS_CLIP);
     }
 
-    // Wrapped text in at most `lines` lines (cut by a clip past that; Fits keeps a request from needing more).
+    // Wrapped text in at most `lines` lines: a longer one ends in an ellipsis on its last line (Fits keeps Bloom's
+    // request from needing more; a T3 session's question may).
     void Wrapped(const std::wstring& s, float x, float y, float w, float size, DWRITE_FONT_WEIGHT weight, int lines,
                  float lineH, uint32_t argb, const wchar_t* family = L"Segoe UI") {
-        if (!dc_ || s.empty()) return;
-        auto l = Layout(s, w, lines * lineH, size, weight, false, true, family);
+        if (!dc_ || s.empty() || lines <= 0) return;
+        auto l = Layout(s, w, lines * lineH + 1, size, weight, false, true, family);
         if (!l) return;
         DWRITE_LINE_SPACING_METHOD method = DWRITE_LINE_SPACING_METHOD_UNIFORM;
         l->SetLineSpacing(method, lineH, lineH * 0.8f);
+        DWRITE_TRIMMING trim{DWRITE_TRIMMING_GRANULARITY_CHARACTER, 0, 0};
+        ComPtr<IDWriteInlineObject> dots;
+        if (SUCCEEDED(dwrite_->CreateEllipsisTrimmingSign(l.Get(), &dots))) l->SetTrimming(&trim, dots.Get());
         Color(argb);
         dc_->PushAxisAlignedClip({x, y, x + w, y + lines * lineH}, D2D1_ANTIALIAS_MODE_ALIASED);
         dc_->DrawTextLayout({x, y}, l.Get(), brush_.Get());
@@ -1120,6 +1123,7 @@ private:
     float Questions(const Ask& a, float y, Laid& L) {
         const Palette& p = *p_;
         float w = L.w, tw = w - 2 * kPad;
+        const AskLines cap = a.Lines();
         bool paged = a.questions.size() > 1;
         size_t from = paged ? size_t(std::clamp(a.page, 0, int(a.questions.size()) - 1)) : 0;
         size_t to = paged ? from + 1 : a.questions.size();
@@ -1136,16 +1140,16 @@ private:
                 if (dc_) Text(top, kPad, y, tw, 16, 11, DWRITE_FONT_WEIGHT_SEMI_BOLD, p.faint);
                 y += 17;
             }
-            float th = TextH(q.text, tw, 12.5f, DWRITE_FONT_WEIGHT_SEMI_BOLD, kQuestionLines, 18);
-            if (dc_) Wrapped(q.text, kPad, y, tw, 12.5f, DWRITE_FONT_WEIGHT_SEMI_BOLD, kQuestionLines, 18, p.text);
+            float th = TextH(q.text, tw, 12.5f, DWRITE_FONT_WEIGHT_SEMI_BOLD, cap.question, 18);
+            if (dc_) Wrapped(q.text, kPad, y, tw, 12.5f, DWRITE_FONT_WEIGHT_SEMI_BOLD, cap.question, 18, p.text);
             y += th + 4;
             const std::vector<int>* picked = qi < a.picks.size() ? &a.picks[qi] : nullptr;
             for (size_t ci = 0; ci < q.choices.size(); ci++) {
                 const Choice& ch = q.choices[ci];
                 bool on = picked && std::find(picked->begin(), picked->end(), int(ci)) != picked->end();
-                bool about = !ch.description.empty() && ch.description != ch.label;
-                float labelH = TextH(ch.label, tw - 20, 12.5f, DWRITE_FONT_WEIGHT_NORMAL, kLabelLines, 18);
-                float aboutH = about ? TextH(ch.description, tw - 20, 11, DWRITE_FONT_WEIGHT_NORMAL, kAboutLines, 15) : 0;
+                bool about = cap.about > 0 && !ch.description.empty() && ch.description != ch.label;
+                float labelH = TextH(ch.label, tw - 20, 12.5f, DWRITE_FONT_WEIGHT_NORMAL, cap.label, 18);
+                float aboutH = about ? TextH(ch.description, tw - 20, 11, DWRITE_FONT_WEIGHT_NORMAL, cap.about, 15) : 0;
                 float rh = about ? 4 + labelH - 1 + aboutH + 2 : 4 + labelH + 4;
                 D2D1_RECT_F r{kPad - 6, y, w - kPad + 6, y + rh};
                 L.hits.push_back({r, Act::Pick, int(qi), int(ci)});
@@ -1164,11 +1168,11 @@ private:
                         dc_->DrawEllipse({mc, 6, 6}, brush_.Get(), 1.3f);
                         if (on) dc_->FillEllipse({mc, 3.2f, 3.2f}, brush_.Get());
                     }
-                    Wrapped(ch.label, kPad + 20, y + 4, tw - 20, 12.5f, DWRITE_FONT_WEIGHT_NORMAL, kLabelLines, 18, p.text);
+                    Wrapped(ch.label, kPad + 20, y + 4, tw - 20, 12.5f, DWRITE_FONT_WEIGHT_NORMAL, cap.label, 18, p.text);
                     // A picked choice's note a step stronger: the faint tone falls under 4.5:1 on the accent's tint.
                     if (about)
                         Wrapped(ch.description, kPad + 20, y + 4 + labelH - 1, tw - 20, 11, DWRITE_FONT_WEIGHT_NORMAL,
-                                kAboutLines, 15, on ? p.dim : p.faint);
+                                cap.about, 15, on ? p.dim : p.faint);
                 }
                 y += rh + 2;
             }

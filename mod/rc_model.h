@@ -59,10 +59,22 @@ struct Question {
     std::vector<Choice> choices;
 };
 
+// The most lines a question's texts take on the card: the question, a choice's name, the note under it.
+struct AskLines {
+    int question, label, about;
+};
+// Bloom's request is shown whole within these, else Bloom's own card shows it (Painter::Fits).
+constexpr AskLines kWholeLines{3, 2, 3};
+// A T3 session's question has no other card to go to, so the card always shows it: with more lines, a text past them
+// ending in an ellipsis, and with the next step's fewer while the card would be taller than its room.
+constexpr AskLines kRowLines[] = {{6, 3, 6}, {3, 2, 3}, {2, 1, 1}, {1, 1, 0}};
+
 // A request from Bloom waiting on this session's card.
 struct Ask {
     std::string id;
     bool inRow = false;  // a T3 session's question (Bloom's `question`): answered through the row to type in, not Bloom's request
+    int tight = 0;       // ... the step of kRowLines its texts are cut to
+    AskLines Lines() const { return inRow ? kRowLines[std::clamp(tight, 0, int(std::size(kRowLines)) - 1)] : kWholeLines; }
     std::wstring tool;  // "Bash", "Edit", "AskUserQuestion"
     std::wstring body;  // every field of the call as "name: value", one per line (empty for questions)
     std::vector<Question> questions;
