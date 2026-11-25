@@ -96,11 +96,12 @@ beside them, and use no tokens. At rest nothing moves or redraws.
     - dark: 다크
     - light: 라이트
   - width: same
-    $name: 알약 길이
-    $description: 접힌 카드(알약)의 길이. 같은 길이면 펼친 카드와 같은 너비이고 넘치는 글은 줄임표로 줄입니다
+    $name: 접힌 모양
+    $description: 접힌 카드의 모양. 같은 길이면 펼친 카드와 같은 너비이고 넘치는 글은 줄임표로 줄입니다. 아이콘만이면 동그란 아이콘 하나로 줄어들고, 포인터를 올리면 카드로 펼쳐집니다
     $options:
     - same: 같은 길이
     - fit: 내용에 맞춤
+    - icon: 아이콘만
   $name: 모양
 */
 // ==/WindhawkModSettings==
