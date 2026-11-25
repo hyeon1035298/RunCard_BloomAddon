@@ -2,7 +2,7 @@
 // @id              run-card
 // @name            Task Cards
 // @description     A live card for each running Claude Code session: what it does now, its steps, and its questions to answer
-// @version         0.1.3
+// @version         0.1.4
 // @author          Hyeon
 // @include         explorer.exe
 // @architecture    x86-64
