@@ -19,7 +19,7 @@ env:
   WINDOWS_SDK_VERSION: "10.0.26100.0"
   # The add-on tools (runtime, host, bundle scripts) come from PillTaskbar_BloomAddon at this commit.
   PILL_REPO: "hyeon1035298/PillTaskbar_BloomAddon"
-  PILL_COMMIT: "cae1ccff863c1d544e7dc536939b0e9b0b50a65c"
+  PILL_COMMIT: "aa2af19655447fa7bf0aa4b921fdd763cfd64117"
 
 permissions:
   contents: read
